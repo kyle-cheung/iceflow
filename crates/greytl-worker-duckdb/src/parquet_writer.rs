@@ -522,12 +522,23 @@ fn json_text(value: &Value) -> String {
 }
 
 fn escape_json_string(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\u{0008}' => escaped.push_str("\\b"),
+            '\u{000c}' => escaped.push_str("\\f"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch <= '\u{001f}' => {
+                escaped.push_str(&format!("\\u{:04x}", ch as u32));
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn stable_hash(parts: impl IntoIterator<Item = String>) -> String {
@@ -561,11 +572,9 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::BTreeMap;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
 
+    use crate::parquet_writer::json_text;
+    use crate::test_support::run_ready;
     use crate::{DuckDbWorker, WriterConfig};
 
     #[test]
@@ -595,6 +604,13 @@ mod tests {
 
         assert!(output.manifest.file_set.len() >= 2);
         assert_eq!(output.manifest.record_count, 3);
+    }
+
+    #[test]
+    fn json_text_escapes_all_control_characters() {
+        let value = serde_json::Value::String("bad\u{0008}\u{000c}\u{0001}\n\r\t".to_string());
+
+        assert_eq!(json_text(&value), "\"bad\\b\\f\\u0001\\n\\r\\t\"");
     }
 
     fn sample_customer_state_batch() -> SourceBatch {
@@ -676,25 +692,5 @@ mod tests {
 
     fn sample_time() -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::from_timestamp(1, 0).expect("valid timestamp")
-    }
-
-    fn run_ready<F>(future: F) -> F::Output
-    where
-        F: Future,
-    {
-        struct NoopWake;
-
-        impl Wake for NoopWake {
-            fn wake(self: Arc<Self>) {}
-        }
-
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        let mut future = Pin::from(Box::new(future));
-
-        match Future::poll(future.as_mut(), &mut context) {
-            Poll::Ready(output) => output,
-            Poll::Pending => panic!("future unexpectedly pending"),
-        }
     }
 }

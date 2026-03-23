@@ -31,3 +31,31 @@ impl DuckDbWorker {
         parquet_writer::materialize_batch(&self.config, normalized)
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    pub(crate) fn run_ready<F>(future: F) -> F::Output
+    where
+        F: Future,
+    {
+        struct NoopWake;
+
+        impl Wake for NoopWake {
+            fn wake(self: Arc<Self>) {}
+        }
+
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        let mut future = Pin::from(Box::new(future));
+
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(output) => output,
+            Poll::Pending => panic!("future unexpectedly pending"),
+        }
+    }
+}

@@ -167,11 +167,8 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::BTreeMap;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
 
+    use crate::test_support::run_ready;
     use crate::DuckDbWorker;
 
     #[test]
@@ -201,6 +198,21 @@ mod tests {
         assert!(err.to_string().contains("ordering_field"));
     }
 
+    #[test]
+    fn append_only_normalize_preserves_records_and_bounds() {
+        let worker = DuckDbWorker::in_memory().expect("worker");
+        let normalized = run_ready(worker.normalize(sample_append_only_batch())).expect("normalized batch");
+
+        assert_eq!(normalized.record_count(), 3);
+        assert_eq!(normalized.ordering_min(), 11);
+        assert_eq!(normalized.ordering_max(), 13);
+        assert_eq!(normalized.source_checkpoint_start().as_str(), "cp-11");
+        assert_eq!(normalized.source_checkpoint_end().as_str(), "cp-13");
+        assert_eq!(normalized.records()[0].ordering_value, 11);
+        assert_eq!(normalized.records()[1].ordering_value, 12);
+        assert_eq!(normalized.records()[2].ordering_value, 13);
+    }
+
     fn sample_keyed_batch() -> SourceBatch {
         SourceBatch {
             batch_file: "fixtures/customer_state/batch-0001.jsonl".to_string(),
@@ -220,6 +232,17 @@ mod tests {
         SourceBatch {
             batch_file: "fixtures/customer_state/batch-0002.jsonl".to_string(),
             records: vec![first, second],
+        }
+    }
+
+    fn sample_append_only_batch() -> SourceBatch {
+        SourceBatch {
+            batch_file: "fixtures/orders/batch-0001.jsonl".to_string(),
+            records: vec![
+                append_insert(1, 11),
+                append_insert(2, 12),
+                append_insert(3, 13),
+            ],
         }
     }
 
@@ -260,27 +283,25 @@ mod tests {
         .expect("valid delete")
     }
 
-    fn sample_time() -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::from_timestamp(1, 0).expect("valid timestamp")
+    fn append_insert(order_id: i64, ordering_value: i64) -> LogicalMutation {
+        LogicalMutation::insert(
+            table_id("orders"),
+            "source-a",
+            SourceClass::FileOrObjectDrop,
+            TableMode::AppendOnly,
+            greytl_types::StructuredKey::new(vec![]),
+            ordering("line_number", ordering_value),
+            checkpoint(format!("cp-{ordering_value}")),
+            1,
+            sample_time(),
+            BTreeMap::new(),
+        )
+        .with_after(json!({ "order_id": order_id, "amount_cents": 100 }))
+        .build()
+        .expect("valid insert")
     }
 
-    fn run_ready<F>(future: F) -> F::Output
-    where
-        F: Future,
-    {
-        struct NoopWake;
-
-        impl Wake for NoopWake {
-            fn wake(self: Arc<Self>) {}
-        }
-
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        let mut future = Pin::from(Box::new(future));
-
-        match Future::poll(future.as_mut(), &mut context) {
-            Poll::Ready(output) => output,
-            Poll::Pending => panic!("future unexpectedly pending"),
-        }
+    fn sample_time() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(1, 0).expect("valid timestamp")
     }
 }
