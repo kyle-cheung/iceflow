@@ -13,6 +13,10 @@ macro_rules! id_type {
             pub fn as_str(&self) -> &str {
                 &self.0
             }
+
+            pub fn is_empty(&self) -> bool {
+                self.0.is_empty()
+            }
         }
 
         impl From<&str> for $name {
@@ -38,3 +42,4 @@ macro_rules! id_type {
 id_type!(TableId);
 id_type!(BatchId);
 id_type!(CommitAttemptId);
+id_type!(CheckpointId);

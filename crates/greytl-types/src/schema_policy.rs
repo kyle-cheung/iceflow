@@ -55,22 +55,25 @@ pub fn evaluate_schema_policy(current: &Schema, next: &Schema) -> SchemaDecision
 pub fn key_column_type_changed(current: &Schema, next: &Schema) -> bool {
     current.key_columns.iter().any(|key_column| {
         match (current.column(key_column), next.column(key_column)) {
-            (Some(current_column), Some(next_column)) => current_column.data_type != next_column.data_type,
+            (Some(current_column), Some(next_column)) => {
+                current_column.data_type != next_column.data_type
+            }
             _ => false,
         }
     })
 }
 
 pub fn only_additive_or_allowed_widening(current: &Schema, next: &Schema) -> bool {
-    current.columns.iter().all(|current_column| {
-        match next.column(&current_column.name) {
+    current
+        .columns
+        .iter()
+        .all(|current_column| match next.column(&current_column.name) {
             Some(next_column) => {
                 current_column.data_type == next_column.data_type
                     || is_allowed_widening(&current_column.data_type, &next_column.data_type)
             }
             None => false,
-        }
-    })
+        })
 }
 
 fn is_allowed_widening(current: &DataType, next: &DataType) -> bool {

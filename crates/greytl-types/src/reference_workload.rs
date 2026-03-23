@@ -43,7 +43,5 @@ pub const KEYED_UPSERT_CUSTOMER_STATE: ReferenceWorkload = ReferenceWorkload {
     delete_rate_percent: Some(10),
 };
 
-pub const REFERENCE_WORKLOAD_V0: [ReferenceWorkload; 2] = [
-    APPEND_ONLY_ORDERS_EVENTS,
-    KEYED_UPSERT_CUSTOMER_STATE,
-];
+pub const REFERENCE_WORKLOAD_V0: [ReferenceWorkload; 2] =
+    [APPEND_ONLY_ORDERS_EVENTS, KEYED_UPSERT_CUSTOMER_STATE];

@@ -1,4 +1,4 @@
-use crate::ids::TableId;
+use crate::ids::{CheckpointId, TableId};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -58,8 +58,23 @@ impl StructuredKey {
         Self { parts }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.parts.is_empty()
+    pub fn validate(&self) -> Result<()> {
+        if self.parts.is_empty() {
+            anyhow::bail!("key is required");
+        }
+
+        let mut previous_name: Option<&str> = None;
+        for part in &self.parts {
+            if part.name.trim().is_empty() {
+                anyhow::bail!("key part name is required");
+            }
+            if previous_name == Some(part.name.as_str()) {
+                anyhow::bail!("key part names must be unique");
+            }
+            previous_name = Some(&part.name);
+        }
+
+        Ok(())
     }
 }
 
@@ -90,77 +105,49 @@ pub struct LogicalMutation {
     pub before: Option<Value>,
     pub ordering_field: String,
     pub ordering_value: i64,
-    pub source_checkpoint: String,
+    pub source_checkpoint: CheckpointId,
     pub source_event_id: Option<String>,
     pub schema_version: i32,
     pub ingestion_ts: DateTime<Utc>,
     pub source_metadata: BTreeMap<String, String>,
 }
 
-impl LogicalMutation {
-    pub fn insert(
-        table_id: TableId,
-        key: StructuredKey,
-        ordering: Ordering,
-        source_checkpoint: impl Into<String>,
-    ) -> Self {
-        Self::new(
-            table_id,
-            SourceClass::DatabaseCdc,
-            TableMode::AppendOnly,
-            Operation::Insert,
-            key,
-            ordering,
-            source_checkpoint,
-        )
-    }
+#[derive(Debug, Clone)]
+pub struct LogicalMutationBuilder {
+    table_id: TableId,
+    source_id: String,
+    source_class: SourceClass,
+    table_mode: TableMode,
+    op: Operation,
+    key: StructuredKey,
+    after: Option<Value>,
+    before: Option<Value>,
+    ordering_field: String,
+    ordering_value: i64,
+    source_checkpoint: CheckpointId,
+    source_event_id: Option<String>,
+    schema_version: i32,
+    ingestion_ts: DateTime<Utc>,
+    source_metadata: BTreeMap<String, String>,
+}
 
-    pub fn upsert(
+impl LogicalMutationBuilder {
+    pub fn new(
         table_id: TableId,
-        key: StructuredKey,
-        ordering: Ordering,
-        source_checkpoint: impl Into<String>,
-    ) -> Self {
-        Self::new(
-            table_id,
-            SourceClass::DatabaseCdc,
-            TableMode::KeyedUpsert,
-            Operation::Upsert,
-            key,
-            ordering,
-            source_checkpoint,
-        )
-    }
-
-    pub fn delete(
-        table_id: TableId,
-        key: StructuredKey,
-        ordering: Ordering,
-        source_checkpoint: impl Into<String>,
-    ) -> Self {
-        Self::new(
-            table_id,
-            SourceClass::DatabaseCdc,
-            TableMode::KeyedUpsert,
-            Operation::Delete,
-            key,
-            ordering,
-            source_checkpoint,
-        )
-    }
-
-    fn new(
-        table_id: TableId,
+        source_id: impl Into<String>,
         source_class: SourceClass,
         table_mode: TableMode,
         op: Operation,
         key: StructuredKey,
         ordering: Ordering,
-        source_checkpoint: impl Into<String>,
+        source_checkpoint: CheckpointId,
+        schema_version: i32,
+        ingestion_ts: DateTime<Utc>,
+        source_metadata: BTreeMap<String, String>,
     ) -> Self {
         Self {
             table_id,
-            source_id: String::new(),
+            source_id: source_id.into(),
             source_class,
             table_mode,
             op,
@@ -169,11 +156,11 @@ impl LogicalMutation {
             before: None,
             ordering_field: ordering.field,
             ordering_value: ordering.value,
-            source_checkpoint: source_checkpoint.into(),
+            source_checkpoint,
             source_event_id: None,
-            schema_version: 0,
-            ingestion_ts: Utc::now(),
-            source_metadata: BTreeMap::new(),
+            schema_version,
+            ingestion_ts,
+            source_metadata,
         }
     }
 
@@ -186,6 +173,142 @@ impl LogicalMutation {
         self.before = Some(before);
         self
     }
+
+    pub fn with_source_event_id(mut self, source_event_id: impl Into<String>) -> Self {
+        self.source_event_id = Some(source_event_id.into());
+        self
+    }
+
+    pub fn build(self) -> LogicalMutation {
+        LogicalMutation {
+            table_id: self.table_id,
+            source_id: self.source_id,
+            source_class: self.source_class,
+            table_mode: self.table_mode,
+            op: self.op,
+            key: self.key,
+            after: self.after,
+            before: self.before,
+            ordering_field: self.ordering_field,
+            ordering_value: self.ordering_value,
+            source_checkpoint: self.source_checkpoint,
+            source_event_id: self.source_event_id,
+            schema_version: self.schema_version,
+            ingestion_ts: self.ingestion_ts,
+            source_metadata: self.source_metadata,
+        }
+    }
+}
+
+impl LogicalMutation {
+    pub fn builder(
+        table_id: TableId,
+        source_id: impl Into<String>,
+        source_class: SourceClass,
+        table_mode: TableMode,
+        op: Operation,
+        key: StructuredKey,
+        ordering: Ordering,
+        source_checkpoint: CheckpointId,
+        schema_version: i32,
+        ingestion_ts: DateTime<Utc>,
+        source_metadata: BTreeMap<String, String>,
+    ) -> LogicalMutationBuilder {
+        LogicalMutationBuilder::new(
+            table_id,
+            source_id,
+            source_class,
+            table_mode,
+            op,
+            key,
+            ordering,
+            source_checkpoint,
+            schema_version,
+            ingestion_ts,
+            source_metadata,
+        )
+    }
+
+    pub fn insert(
+        table_id: TableId,
+        source_id: impl Into<String>,
+        source_class: SourceClass,
+        table_mode: TableMode,
+        key: StructuredKey,
+        ordering: Ordering,
+        source_checkpoint: CheckpointId,
+        schema_version: i32,
+        ingestion_ts: DateTime<Utc>,
+        source_metadata: BTreeMap<String, String>,
+    ) -> LogicalMutationBuilder {
+        Self::builder(
+            table_id,
+            source_id,
+            source_class,
+            table_mode,
+            Operation::Insert,
+            key,
+            ordering,
+            source_checkpoint,
+            schema_version,
+            ingestion_ts,
+            source_metadata,
+        )
+    }
+
+    pub fn upsert(
+        table_id: TableId,
+        source_id: impl Into<String>,
+        source_class: SourceClass,
+        table_mode: TableMode,
+        key: StructuredKey,
+        ordering: Ordering,
+        source_checkpoint: CheckpointId,
+        schema_version: i32,
+        ingestion_ts: DateTime<Utc>,
+        source_metadata: BTreeMap<String, String>,
+    ) -> LogicalMutationBuilder {
+        Self::builder(
+            table_id,
+            source_id,
+            source_class,
+            table_mode,
+            Operation::Upsert,
+            key,
+            ordering,
+            source_checkpoint,
+            schema_version,
+            ingestion_ts,
+            source_metadata,
+        )
+    }
+
+    pub fn delete(
+        table_id: TableId,
+        source_id: impl Into<String>,
+        source_class: SourceClass,
+        table_mode: TableMode,
+        key: StructuredKey,
+        ordering: Ordering,
+        source_checkpoint: CheckpointId,
+        schema_version: i32,
+        ingestion_ts: DateTime<Utc>,
+        source_metadata: BTreeMap<String, String>,
+    ) -> LogicalMutationBuilder {
+        Self::builder(
+            table_id,
+            source_id,
+            source_class,
+            table_mode,
+            Operation::Delete,
+            key,
+            ordering,
+            source_checkpoint,
+            schema_version,
+            ingestion_ts,
+            source_metadata,
+        )
+    }
 }
 
 pub fn validate_mutation(m: &LogicalMutation) -> Result<()> {
@@ -195,6 +318,27 @@ pub fn validate_mutation(m: &LogicalMutation) -> Result<()> {
             anyhow::bail!("insert/upsert require after payload")
         }
         _ => {}
+    }
+
+    if m.table_id.as_str().trim().is_empty() {
+        anyhow::bail!("table_id is required");
+    }
+    if m.source_id.trim().is_empty() {
+        anyhow::bail!("source_id is required");
+    }
+    if m.ordering_field.trim().is_empty() {
+        anyhow::bail!("ordering_field is required");
+    }
+    if m.source_checkpoint.as_str().trim().is_empty() {
+        anyhow::bail!("source_checkpoint is required");
+    }
+    if m.schema_version <= 0 {
+        anyhow::bail!("schema_version must be positive");
+    }
+    if let Some(source_event_id) = &m.source_event_id {
+        if source_event_id.trim().is_empty() {
+            anyhow::bail!("source_event_id must not be empty");
+        }
     }
 
     match m.table_mode {
@@ -207,9 +351,7 @@ pub fn validate_mutation(m: &LogicalMutation) -> Result<()> {
         _ => {}
     }
 
-    if m.key.is_empty() {
-        anyhow::bail!("key is required")
-    }
+    m.key.validate()?;
 
     Ok(())
 }
@@ -231,24 +373,37 @@ pub fn ordering(field: impl Into<String>, value: i64) -> Ordering {
     Ordering::new(field, value)
 }
 
-pub fn checkpoint(value: impl Into<String>) -> String {
-    value.into()
+pub fn checkpoint(value: impl Into<String>) -> CheckpointId {
+    CheckpointId::new(value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
+    use std::time::{Duration, SystemTime};
+
+    fn now() -> DateTime<Utc> {
+        DateTime::from_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+    }
 
     #[test]
     fn delete_mutation_requires_null_after() {
         let mutation = LogicalMutation::delete(
             table_id("customer_state"),
+            "source-a",
+            SourceClass::DatabaseCdc,
+            TableMode::KeyedUpsert,
             key([("tenant_id", "t1"), ("customer_id", "c1")]),
             ordering("source_position", 42),
             checkpoint("batch-0001"),
+            1,
+            now(),
+            BTreeMap::new(),
         )
-        .with_after(json!({"name": "bad"}));
+        .with_after(json!({"name": "bad"}))
+        .build();
 
         assert!(validate_mutation(&mutation).is_err());
     }

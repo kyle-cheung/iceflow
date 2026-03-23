@@ -26,5 +26,20 @@ impl Utc {
             _tz: PhantomData,
         }
     }
+
+    pub fn from_system_time(instant: SystemTime) -> DateTime<Utc> {
+        DateTime {
+            instant,
+            _tz: PhantomData,
+        }
+    }
 }
 
+impl<Tz> DateTime<Tz> {
+    pub fn from_system_time(instant: SystemTime) -> Self {
+        Self {
+            instant,
+            _tz: PhantomData,
+        }
+    }
+}

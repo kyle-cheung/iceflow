@@ -32,4 +32,3 @@ macro_rules! bail {
         return Err($crate::Error::msg(format!($fmt, $($arg)*)));
     };
 }
-

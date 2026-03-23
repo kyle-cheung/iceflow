@@ -71,4 +71,3 @@ macro_rules! json {
         $crate::Value::from($other)
     };
 }
-
