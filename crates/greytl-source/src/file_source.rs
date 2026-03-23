@@ -79,14 +79,15 @@ impl FileSource {
     }
 
     fn check_sync(&self) -> Result<CheckReport> {
+        let batch_files = batch_files(&self.fixture_dir);
         let mut record_count = 0;
-        for batch_file in batch_files(&self.fixture_dir) {
+        for batch_file in &batch_files {
             record_count += self.load_batch_file(&batch_file)?.records.len();
         }
 
         Ok(CheckReport {
             fixture_dir: self.fixture_dir_display.clone(),
-            batch_count: batch_files(&self.fixture_dir).len(),
+            batch_count: batch_files.len(),
             record_count,
         })
     }
@@ -484,27 +485,37 @@ impl<'a> Parser<'a> {
 
     fn parse_string(&mut self) -> Result<String> {
         self.expect_byte(b'"')?;
-        let mut out = String::new();
+        let mut out = Vec::new();
         while let Some(byte) = self.next_byte() {
             match byte {
-                b'"' => return Ok(out),
+                b'"' => {
+                    return String::from_utf8(out)
+                        .map_err(|_| Error::msg("invalid UTF-8 string"))
+                }
                 b'\\' => {
                     let escaped = self
                         .next_byte()
                         .ok_or_else(|| Error::msg("unterminated escape sequence"))?;
                     match escaped {
-                        b'"' => out.push('"'),
-                        b'\\' => out.push('\\'),
-                        b'/' => out.push('/'),
-                        b'b' => out.push('\u{0008}'),
-                        b'f' => out.push('\u{000c}'),
-                        b'n' => out.push('\n'),
-                        b'r' => out.push('\r'),
-                        b't' => out.push('\t'),
+                        b'"' => out.push(b'"'),
+                        b'\\' => out.push(b'\\'),
+                        b'/' => out.push(b'/'),
+                        b'b' => out.push(0x08),
+                        b'f' => out.push(0x0c),
+                        b'n' => out.push(b'\n'),
+                        b'r' => out.push(b'\r'),
+                        b't' => out.push(b'\t'),
+                        b'u' => {
+                            let code_point = self.parse_unicode_escape()?;
+                            let mut buffer = [0u8; 4];
+                            let encoded = code_point.encode_utf8(&mut buffer);
+                            out.extend_from_slice(encoded.as_bytes());
+                        }
                         _ => return Err(Error::msg("unsupported escape sequence")),
                     }
                 }
-                _ => out.push(byte as char),
+                byte if byte < 0x20 => return Err(Error::msg("control character in string")),
+                _ => out.push(byte),
             }
         }
         Err(Error::msg("unterminated string"))
@@ -520,6 +531,39 @@ impl<'a> Parser<'a> {
             .map_err(|_| Error::msg("invalid number"))?;
         text.parse::<i64>()
             .map_err(|_| Error::msg(format!("invalid number: {text}")))
+    }
+
+    fn parse_unicode_escape(&mut self) -> Result<char> {
+        let first = self.parse_hex_quad()?;
+        let code_point = if (0xD800..=0xDBFF).contains(&first) {
+            self.expect_byte(b'\\')?;
+            self.expect_byte(b'u')?;
+            let second = self.parse_hex_quad()?;
+            if !(0xDC00..=0xDFFF).contains(&second) {
+                return Err(Error::msg("invalid unicode surrogate pair"));
+            }
+
+            let high = u32::from(first) - 0xD800;
+            let low = u32::from(second) - 0xDC00;
+            0x10000 + ((high << 10) | low)
+        } else if (0xDC00..=0xDFFF).contains(&first) {
+            return Err(Error::msg("unexpected low surrogate"));
+        } else {
+            u32::from(first)
+        };
+
+        char::from_u32(code_point).ok_or_else(|| Error::msg("invalid unicode code point"))
+    }
+
+    fn parse_hex_quad(&mut self) -> Result<u16> {
+        let mut value = 0u16;
+        for _ in 0..4 {
+            let digit = self
+                .next_byte()
+                .ok_or_else(|| Error::msg("unterminated unicode escape"))?;
+            value = (value << 4) | hex_value(digit)?;
+        }
+        Ok(value)
     }
 
     fn expect_bytes(&mut self, expected: &[u8]) -> Result<()> {
@@ -563,5 +607,41 @@ impl<'a> Parser<'a> {
 
     fn is_eof(&self) -> bool {
         self.pos >= self.input.len()
+    }
+}
+
+fn hex_value(byte: u8) -> Result<u16> {
+    match byte {
+        b'0'..=b'9' => Ok(u16::from(byte - b'0')),
+        b'a'..=b'f' => Ok(u16::from(byte - b'a' + 10)),
+        b'A'..=b'F' => Ok(u16::from(byte - b'A' + 10)),
+        _ => Err(Error::msg("invalid unicode escape")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_json_value_preserves_utf8_strings() {
+        let parsed = parse_json_value("{\"name\":\"café\"}").expect("valid JSON");
+        let object = value_as_object(parsed).expect("object value");
+
+        assert_eq!(
+            object.get("name"),
+            Some(&Value::String("café".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_json_value_supports_unicode_escape_sequences() {
+        let parsed = parse_json_value("{\"name\":\"caf\\u00e9\"}").expect("valid JSON");
+        let object = value_as_object(parsed).expect("object value");
+
+        assert_eq!(
+            object.get("name"),
+            Some(&Value::String("café".to_string()))
+        );
     }
 }
