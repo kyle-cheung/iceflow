@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/anyhow",
+    "crates/chrono",
+    "crates/serde_json",
+    "crates/greytl-types",
+    "crates/greytl-state",
+    "crates/greytl-source",
+    "crates/greytl-worker-duckdb",
+    "crates/greytl-sink",
+    "crates/greytl-runtime",
+    "crates/greytl-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"

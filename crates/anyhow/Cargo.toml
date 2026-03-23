@@ -1,0 +1,7 @@
+[package]
+name = "anyhow"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
