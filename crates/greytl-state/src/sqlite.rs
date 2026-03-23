@@ -336,6 +336,19 @@ impl StateStore for SqliteStateStore {
     ) -> Result<()> {
         let conn = Connection::open(&self.path)?;
         conn.with_transaction(|transaction| {
+            let mut existing = transaction
+                .prepare("SELECT ack_status FROM checkpoint_links WHERE batch_id = ?1")?;
+            existing.bind_text(1, batch_id.as_str())?;
+            if step_row(&mut existing)? {
+                let ack_status = existing.column_text(0)?;
+                step_done(&mut existing)?;
+                if ack_status == "durable" {
+                    return Err(Error::msg(
+                        "cannot overwrite a durable checkpoint link with a pending checkpoint",
+                    ));
+                }
+            }
+
             let mut stmt = transaction.prepare(
                 "INSERT OR REPLACE INTO checkpoint_links (
                     batch_id, source_id, checkpoint_id, snapshot_uri, ack_status,

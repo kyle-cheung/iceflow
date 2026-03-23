@@ -1,7 +1,7 @@
 use anyhow::Result;
 use greytl_state::{
     checkpoint_ack, checkpoint_ref, AttemptResolution, AttemptStatus, BatchStatus, CommitRequest,
-    SnapshotRef, StateStore, TestStateStore,
+    QuarantineReason, SnapshotRef, StateStore, TestStateStore,
 };
 use greytl_types::{
     checkpoint, BatchId, BatchManifest, ManifestFile, Operation, SourceClass, TableId, TableMode,
@@ -165,6 +165,69 @@ fn sqlite_connections_use_full_synchronous_mode() -> Result<()> {
         let store = TestStateStore::new().await?;
 
         assert_eq!(store.synchronous_mode().await?, 2);
+        Ok(())
+    })
+}
+
+#[test]
+fn quarantined_batches_remain_recovery_candidates() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+        let batch_id = store.register_batch(sample_manifest()).await?;
+
+        store
+            .mark_quarantine(batch_id.clone(), QuarantineReason::SchemaViolation)
+            .await?;
+
+        assert_eq!(
+            store.batch_status(batch_id.clone()).await?,
+            BatchStatus::Quarantined
+        );
+        assert_eq!(store.list_recovery_candidates().await?, vec![batch_id]);
+        Ok(())
+    })
+}
+
+#[test]
+fn durable_checkpoint_cannot_be_downgraded_to_pending() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+        let batch_id = store.register_batch(sample_manifest()).await?;
+        let attempt = store
+            .begin_commit(batch_id.clone(), sample_commit_request())
+            .await?;
+        let snapshot = sample_snapshot();
+        let checkpoint_ref_value = checkpoint_ref("source-a", checkpoint("cp-2"));
+
+        store
+            .resolve_commit(attempt.id, AttemptResolution::Committed)
+            .await?;
+        store
+            .link_checkpoint_pending(
+                batch_id.clone(),
+                checkpoint_ref_value.clone(),
+                snapshot.clone(),
+            )
+            .await?;
+        store
+            .mark_checkpoint_durable(
+                batch_id.clone(),
+                checkpoint_ack("source-a", checkpoint("cp-2"), snapshot.clone()),
+            )
+            .await?;
+
+        assert!(store
+            .link_checkpoint_pending(batch_id.clone(), checkpoint_ref_value.clone(), snapshot)
+            .await
+            .is_err());
+        assert_eq!(
+            store.batch_status(batch_id.clone()).await?,
+            BatchStatus::Checkpointed
+        );
+        assert_eq!(
+            store.durable_checkpoint(batch_id).await?,
+            Some(checkpoint_ref_value)
+        );
         Ok(())
     })
 }

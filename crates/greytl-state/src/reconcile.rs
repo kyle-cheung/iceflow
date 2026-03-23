@@ -16,7 +16,8 @@ pub(crate) fn list_recovery_candidates(conn: &Connection) -> Result<Vec<BatchId>
                 'commit_uncertain',
                 'schema_revalidating',
                 'retry_ready',
-                'checkpoint_pending'
+                'checkpoint_pending',
+                'quarantined'
             )
            OR a.attempt_status IN ('resolving', 'unknown', 'ambiguous_manual')
         ORDER BY b.batch_id
