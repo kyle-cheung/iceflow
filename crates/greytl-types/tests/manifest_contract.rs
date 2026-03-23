@@ -2,10 +2,8 @@ use greytl_types::{
     checkpoint, BatchId, BatchManifest, ManifestFile, Operation, TableId, TableMode,
 };
 use std::collections::BTreeMap;
-use std::time::{Duration, SystemTime};
-
 fn fixed_time(offset_secs: u64) -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::from_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(offset_secs))
+    chrono::DateTime::from_timestamp(offset_secs as i64, 0).expect("valid timestamp")
 }
 
 fn manifest_fixture(content_hash: &str, file_a_hash: &str) -> BatchManifest {

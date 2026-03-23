@@ -12,10 +12,30 @@ pub enum SourceClass {
     ApiIncremental,
 }
 
+impl SourceClass {
+    pub const fn stable_tag(self) -> &'static str {
+        match self {
+            Self::DatabaseCdc => "database_cdc",
+            Self::MessageLogOrQueue => "message_log_or_queue",
+            Self::FileOrObjectDrop => "file_or_object_drop",
+            Self::ApiIncremental => "api_incremental",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableMode {
     AppendOnly,
     KeyedUpsert,
+}
+
+impl TableMode {
+    pub const fn stable_tag(self) -> &'static str {
+        match self {
+            Self::AppendOnly => "append_only",
+            Self::KeyedUpsert => "keyed_upsert",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,6 +43,16 @@ pub enum Operation {
     Insert,
     Upsert,
     Delete,
+}
+
+impl Operation {
+    pub const fn stable_tag(self) -> &'static str {
+        match self {
+            Self::Insert => "insert",
+            Self::Upsert => "upsert",
+            Self::Delete => "delete",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -177,8 +207,8 @@ impl LogicalMutationBuilder {
         self
     }
 
-    pub fn build(self) -> LogicalMutation {
-        LogicalMutation {
+    pub fn build(self) -> Result<LogicalMutation> {
+        let mutation = LogicalMutation {
             table_id: self.table_id,
             source_id: self.source_id,
             source_class: self.source_class,
@@ -194,7 +224,10 @@ impl LogicalMutationBuilder {
             schema_version: self.schema_version,
             ingestion_ts: self.ingestion_ts,
             source_metadata: self.source_metadata,
-        }
+        };
+
+        validate_mutation(&mutation)?;
+        Ok(mutation)
     }
 }
 
@@ -380,15 +413,14 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::BTreeMap;
-    use std::time::{Duration, SystemTime};
 
     fn now() -> DateTime<Utc> {
-        DateTime::from_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        DateTime::from_timestamp(1, 0).expect("valid timestamp")
     }
 
     #[test]
     fn delete_mutation_requires_null_after() {
-        let mutation = LogicalMutation::delete(
+        let result = LogicalMutation::delete(
             table_id("customer_state"),
             "source-a",
             SourceClass::DatabaseCdc,
@@ -403,6 +435,6 @@ mod tests {
         .with_after(json!({"name": "bad"}))
         .build();
 
-        assert!(validate_mutation(&mutation).is_err());
+        assert!(result.is_err());
     }
 }

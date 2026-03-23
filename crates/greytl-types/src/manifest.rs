@@ -62,7 +62,7 @@ impl BatchManifest {
 
     fn checksum_components(&self) -> Vec<String> {
         let mut parts = self.replay_identity_components();
-        parts.push(format!("{:?}", self.created_at));
+        parts.push(encode_timestamp(&self.created_at));
         parts
     }
 
@@ -70,9 +70,9 @@ impl BatchManifest {
         let mut parts = vec![
             self.batch_id.to_string(),
             self.table_id.to_string(),
-            format!("{:?}", self.table_mode),
+            self.table_mode.stable_tag().to_string(),
             self.source_id.clone(),
-            format!("{:?}", self.source_class),
+            self.source_class.stable_tag().to_string(),
             self.source_checkpoint_start.to_string(),
             self.source_checkpoint_end.to_string(),
             self.ordering_field.clone(),
@@ -87,7 +87,7 @@ impl BatchManifest {
         let mut op_counts: Vec<_> = self
             .op_counts
             .iter()
-            .map(|(op, count)| format!("{:?}={}", op, count))
+            .map(|(op, count)| format!("{}={}", op.stable_tag(), count))
             .collect();
         op_counts.sort();
         parts.extend(op_counts);
@@ -115,4 +115,68 @@ fn stable_checksum(parts: impl IntoIterator<Item = String>) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
+}
+
+fn encode_timestamp(timestamp: &DateTime<Utc>) -> String {
+    format!(
+        "{}:{:09}",
+        timestamp.timestamp(),
+        timestamp.timestamp_subsec_nanos()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixed_time(secs: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(secs, 0).expect("valid timestamp")
+    }
+
+    fn fixture() -> BatchManifest {
+        BatchManifest {
+            batch_id: BatchId::from("batch-0001"),
+            table_id: TableId::from("customer_state"),
+            table_mode: TableMode::KeyedUpsert,
+            source_id: "source-a".to_string(),
+            source_class: SourceClass::DatabaseCdc,
+            source_checkpoint_start: CheckpointId::from("cp-1"),
+            source_checkpoint_end: CheckpointId::from("cp-2"),
+            ordering_field: "source_position".to_string(),
+            ordering_min: 1,
+            ordering_max: 7,
+            schema_version: 3,
+            schema_fingerprint: "fingerprint".to_string(),
+            record_count: 2,
+            op_counts: BTreeMap::from([(Operation::Upsert, 2)]),
+            file_set: vec![ManifestFile {
+                file_uri: "file:///tmp/batch-0001.parquet".to_string(),
+                file_kind: "parquet".to_string(),
+                content_hash: "hash".to_string(),
+                file_size_bytes: 128,
+                record_count: 2,
+                created_at: fixed_time(1),
+            }],
+            content_hash: "content-hash".to_string(),
+            created_at: fixed_time(3),
+        }
+    }
+
+    #[test]
+    fn replay_identity_uses_stable_tags_and_omits_created_at() {
+        let manifest = fixture();
+        let components = manifest.replay_identity_components();
+
+        assert!(components.contains(&"keyed_upsert".to_string()));
+        assert!(components.contains(&"database_cdc".to_string()));
+        assert!(!components.contains(&"3:000000000".to_string()));
+    }
+
+    #[test]
+    fn checksum_encodes_created_at_stably() {
+        let manifest = fixture();
+        let mut components = manifest.checksum_components();
+
+        assert_eq!(components.pop(), Some("3:000000000".to_string()));
+    }
 }

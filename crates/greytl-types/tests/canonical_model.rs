@@ -5,8 +5,6 @@ use greytl_types::{
 };
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::time::{Duration, SystemTime};
-
 fn schema_with_key(name: &str, data_type: DataType) -> Schema {
     Schema::new(
         vec![SchemaColumn {
@@ -19,7 +17,7 @@ fn schema_with_key(name: &str, data_type: DataType) -> Schema {
 }
 
 fn fixed_time() -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::from_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+    chrono::DateTime::from_timestamp(1, 0).expect("valid timestamp")
 }
 
 #[test]
@@ -36,35 +34,44 @@ fn delete_mutation_requires_null_after() {
         fixed_time(),
         BTreeMap::new(),
     )
-    .with_after(json!({"name": "bad"}))
-    .build();
+    .build()
+    .expect("builder should validate the mutation");
+
+    let mut mutation = mutation;
+    mutation.after = Some(json!({"name": "bad"}));
 
     assert!(validate_mutation(&mutation).is_err());
 }
 
 #[test]
 fn validate_mutation_rejects_missing_canonical_metadata() {
-    let mutation = LogicalMutation::builder(
+    let mut mutation = LogicalMutation::builder(
         table_id("customer_state"),
-        "",
+        "source-a",
         SourceClass::DatabaseCdc,
         TableMode::KeyedUpsert,
         Operation::Delete,
         key([("tenant_id", "t1"), ("customer_id", "c1")]),
-        ordering("", 42),
-        checkpoint(""),
-        0,
+        ordering("source_position", 42),
+        checkpoint("batch-0001"),
+        1,
         fixed_time(),
         BTreeMap::new(),
     )
-    .build();
+    .build()
+    .expect("builder should validate the mutation");
+
+    mutation.source_id.clear();
+    mutation.ordering_field.clear();
+    mutation.source_checkpoint = checkpoint("");
+    mutation.schema_version = 0;
 
     assert!(validate_mutation(&mutation).is_err());
 }
 
 #[test]
 fn validate_mutation_rejects_non_adjacent_duplicate_key_parts() {
-    let key = StructuredKey::new(vec![
+    let invalid_key = StructuredKey::new(vec![
         KeyPart {
             name: "tenant_id".to_string(),
             value: json!("t1"),
@@ -79,20 +86,25 @@ fn validate_mutation_rejects_non_adjacent_duplicate_key_parts() {
         },
     ]);
 
-    let mutation = LogicalMutation::builder(
+    let valid_key = key([("tenant_id", "t1"), ("customer_id", "c1")]);
+
+    let mut mutation = LogicalMutation::builder(
         table_id("customer_state"),
         "source-a",
         SourceClass::DatabaseCdc,
         TableMode::KeyedUpsert,
         Operation::Delete,
-        key,
+        valid_key,
         ordering("source_position", 42),
         checkpoint("batch-0001"),
         1,
         fixed_time(),
         BTreeMap::new(),
     )
-    .build();
+    .build()
+    .expect("builder should validate the mutation");
+
+    mutation.key = invalid_key;
 
     assert!(validate_mutation(&mutation).is_err());
 }
@@ -118,5 +130,37 @@ fn schema_policy_rejects_key_column_widening() {
     assert_eq!(
         evaluate_schema_policy(&current, &next),
         SchemaDecision::Quarantine("key-column-type-change")
+    );
+}
+
+#[test]
+fn schema_policy_allows_additive_evolution() {
+    let current = Schema::new(
+        vec![SchemaColumn {
+            name: "customer_id".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+        }],
+        vec!["customer_id".to_string()],
+    );
+    let next = Schema::new(
+        vec![
+            SchemaColumn {
+                name: "customer_id".to_string(),
+                data_type: DataType::Int32,
+                nullable: false,
+            },
+            SchemaColumn {
+                name: "customer_name".to_string(),
+                data_type: DataType::String,
+                nullable: true,
+            },
+        ],
+        vec!["customer_id".to_string()],
+    );
+
+    assert_eq!(
+        evaluate_schema_policy(&current, &next),
+        SchemaDecision::Allow
     );
 }

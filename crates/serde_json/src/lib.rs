@@ -40,18 +40,6 @@ impl From<i64> for Value {
     }
 }
 
-impl From<u64> for Value {
-    fn from(value: u64) -> Self {
-        Self::Number(value as i64)
-    }
-}
-
-impl From<usize> for Value {
-    fn from(value: usize) -> Self {
-        Self::Number(value as i64)
-    }
-}
-
 #[macro_export]
 macro_rules! json {
     (null) => {

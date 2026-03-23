@@ -209,4 +209,36 @@ mod tests {
             SchemaDecision::Quarantine("key-column-membership-or-order-change")
         );
     }
+
+    #[test]
+    fn schema_policy_allows_additive_evolution() {
+        let current = schema_with_keys(
+            vec![SchemaColumn {
+                name: "customer_id".to_string(),
+                data_type: DataType::Int32,
+                nullable: false,
+            }],
+            vec!["customer_id"],
+        );
+        let next = schema_with_keys(
+            vec![
+                SchemaColumn {
+                    name: "customer_id".to_string(),
+                    data_type: DataType::Int32,
+                    nullable: false,
+                },
+                SchemaColumn {
+                    name: "customer_name".to_string(),
+                    data_type: DataType::String,
+                    nullable: true,
+                },
+            ],
+            vec!["customer_id"],
+        );
+
+        assert_eq!(
+            evaluate_schema_policy(&current, &next),
+            SchemaDecision::Allow
+        );
+    }
 }
