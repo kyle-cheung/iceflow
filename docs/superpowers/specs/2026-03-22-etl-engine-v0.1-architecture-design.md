@@ -54,6 +54,7 @@ V0 uses a Rust coordinator with an in-process DuckDB worker runtime.
 
 - the engine boundary must stay narrow and explicit: Arrow input batches, Parquet output files, and explicit commit requests
 - process-boundary worker isolation is deferred in v0
+- in-process embedding means a DuckDB panic, crash, or memory-safety fault is not contained and can terminate the Rust coordinator; this is acceptable for v0's narrow synthetic-source scope and is the risk `G2` is designed to surface
 - if the in-process DuckDB path fails `G2` because of crash containment, ownership, or retry-poisoning behavior, the default engine choice fails and the boundary must be revisited before proceeding
 
 ## 5. Control Plane And Durable State Model
@@ -362,10 +363,10 @@ Late arrivals:
 
 ### 6.3 Schema Evolution Policy
 
-Schema evolution is policy-driven and versioned. The v0 and v1 default policy is:
+Schema evolution is policy-driven and versioned. The v0 and v1 policy is:
 
 - additive column creation: allowed
-- safe widening: allowed for explicitly supported cases such as `int -> long` and `float -> double`
+- safe widening: limited to `int -> long` and `float -> double` in v0 and v1
 - narrowing conversions: disallowed automatically
 - renames: not inferred automatically
 - drops: not inferred automatically
