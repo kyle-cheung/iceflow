@@ -374,6 +374,7 @@ Schema evolution is policy-driven and versioned. The v0 and v1 policy is:
 
 Retry-time schema revalidation applies the same policy against the current table schema.
 
+- key-column type changes are disallowed in v0, including widening, because keyed identity and equality-delete behavior must remain stable across replay
 - if the batch remains compatible under policy, it may proceed to `retry_ready`
 - if the batch violates policy under the current table schema, it moves to `quarantined`
 
@@ -833,7 +834,7 @@ Fail:
 - borrowed or adapted connectors require core-engine changes
 - connectors cannot surface deterministic checkpoint or ordering data
 
-This gate is not required to prove v0 correctness, but it is required before broad source claims.
+This gate is not part of the v0 implementation plan. It is a post-v0 framework-expansion gate that applies only after the narrowed v0 slice has passed `G0`, `G2`, and `G3`.
 
 ## 13. Narrowed V0 Scope
 
@@ -854,7 +855,7 @@ Out of scope:
 - arbitrary out-of-order CDC conflict resolution
 - multi-writer per table
 - continuous compaction service
-- broad connector coverage
+- broad connector coverage, including `G4` connector-sufficiency validation across multiple source classes
 - rename or drop schema automation
 - partition evolution and advanced clustering
 
