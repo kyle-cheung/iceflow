@@ -48,6 +48,14 @@ The design uses:
 - a durable control plane as the source of truth for batch identity, commit attempts, checkpoint linkage, and recovery
 - a sink abstraction defined in terms of deterministic Iceberg commit and lookup operations, not source progression
 
+### 4.1 Execution Boundary
+
+V0 uses a Rust coordinator with an in-process DuckDB worker runtime.
+
+- the engine boundary must stay narrow and explicit: Arrow input batches, Parquet output files, and explicit commit requests
+- process-boundary worker isolation is deferred in v0
+- if the in-process DuckDB path fails `G2` because of crash containment, ownership, or retry-poisoning behavior, the default engine choice fails and the boundary must be revisited before proceeding
+
 ## 5. Control Plane And Durable State Model
 
 Correctness lives in the durable control plane. Workers execute write-path steps, but they do not own truth about whether a batch exists, whether a commit was already attempted, whether replay is safe, or whether a source checkpoint may advance.
@@ -151,6 +159,7 @@ Allowed `batch_status` values:
 Allowed `attempt_status` values:
 
 - `started`
+- `resolving`
 - `unknown`
 - `committed`
 - `rejected`
@@ -350,6 +359,22 @@ Ordering violations:
 Late arrivals:
 
 - delayed earlier changes arriving after a later change has committed are out of scope for v0 and v1 and are treated as contract violations
+
+### 6.3 Schema Evolution Policy
+
+Schema evolution is policy-driven and versioned. The v0 and v1 default policy is:
+
+- additive column creation: allowed
+- safe widening: allowed for explicitly supported cases such as `int -> long` and `float -> double`
+- narrowing conversions: disallowed automatically
+- renames: not inferred automatically
+- drops: not inferred automatically
+- incompatible type changes: quarantine plus manual intervention
+
+Retry-time schema revalidation applies the same policy against the current table schema.
+
+- if the batch remains compatible under policy, it may proceed to `retry_ready`
+- if the batch violates policy under the current table schema, it moves to `quarantined`
 
 ## 7. Two-Layer Data Model
 
@@ -832,9 +857,9 @@ Out of scope:
 - rename or drop schema automation
 - partition evolution and advanced clustering
 
-## 14. Remaining Planning Questions
+## 14. Planning Constraints
 
-The next planning draft should answer these implementation-facing questions:
+The next planning draft should treat these architecture decisions as fixed inputs:
 
-- whether the Rust and DuckDB boundary should remain in-process in v0 or move to a process boundary for containment
-- what exact v0 schema evolution policy applies during initial ingest and retry-time revalidation, including additive columns, safe widening, and incompatible changes
+- v0 uses a Rust coordinator with an in-process DuckDB worker runtime as defined in Section 4.1
+- schema evolution during initial ingest and retry-time revalidation follows the policy defined in Section 6.3
