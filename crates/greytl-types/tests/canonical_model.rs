@@ -44,26 +44,32 @@ fn delete_mutation_requires_null_after() {
 }
 
 #[test]
-fn validate_mutation_rejects_missing_canonical_metadata() {
-    let mut mutation = LogicalMutation::builder(
-        table_id("customer_state"),
-        "source-a",
-        SourceClass::DatabaseCdc,
-        TableMode::KeyedUpsert,
-        Operation::Delete,
-        key([("tenant_id", "t1"), ("customer_id", "c1")]),
-        ordering("source_position", 42),
-        checkpoint("batch-0001"),
-        1,
-        fixed_time(),
-        BTreeMap::new(),
-    )
-    .build()
-    .expect("builder should validate the mutation");
-
+fn validate_mutation_rejects_missing_source_id() {
+    let mut mutation = valid_keyed_mutation();
     mutation.source_id.clear();
+
+    assert!(validate_mutation(&mutation).is_err());
+}
+
+#[test]
+fn validate_mutation_rejects_empty_ordering_field() {
+    let mut mutation = valid_keyed_mutation();
     mutation.ordering_field.clear();
+
+    assert!(validate_mutation(&mutation).is_err());
+}
+
+#[test]
+fn validate_mutation_rejects_missing_source_checkpoint() {
+    let mut mutation = valid_keyed_mutation();
     mutation.source_checkpoint = checkpoint("");
+
+    assert!(validate_mutation(&mutation).is_err());
+}
+
+#[test]
+fn validate_mutation_rejects_nonpositive_schema_version() {
+    let mut mutation = valid_keyed_mutation();
     mutation.schema_version = 0;
 
     assert!(validate_mutation(&mutation).is_err());
@@ -86,24 +92,7 @@ fn validate_mutation_rejects_non_adjacent_duplicate_key_parts() {
         },
     ]);
 
-    let valid_key = key([("tenant_id", "t1"), ("customer_id", "c1")]);
-
-    let mut mutation = LogicalMutation::builder(
-        table_id("customer_state"),
-        "source-a",
-        SourceClass::DatabaseCdc,
-        TableMode::KeyedUpsert,
-        Operation::Delete,
-        valid_key,
-        ordering("source_position", 42),
-        checkpoint("batch-0001"),
-        1,
-        fixed_time(),
-        BTreeMap::new(),
-    )
-    .build()
-    .expect("builder should validate the mutation");
-
+    let mut mutation = valid_keyed_mutation();
     mutation.key = invalid_key;
 
     assert!(validate_mutation(&mutation).is_err());
@@ -163,4 +152,42 @@ fn schema_policy_allows_additive_evolution() {
         evaluate_schema_policy(&current, &next),
         SchemaDecision::Allow
     );
+}
+
+#[test]
+fn append_only_mutation_allows_empty_key() {
+    let mutation = LogicalMutation::insert(
+        table_id("orders_events"),
+        "source-a",
+        SourceClass::DatabaseCdc,
+        TableMode::AppendOnly,
+        StructuredKey::new(vec![]),
+        ordering("source_position", 1),
+        checkpoint("batch-0001"),
+        1,
+        fixed_time(),
+        BTreeMap::new(),
+    )
+    .with_after(json!({"order_id": "o-1"}))
+    .build();
+
+    assert!(mutation.is_ok());
+}
+
+fn valid_keyed_mutation() -> LogicalMutation {
+    LogicalMutation::builder(
+        table_id("customer_state"),
+        "source-a",
+        SourceClass::DatabaseCdc,
+        TableMode::KeyedUpsert,
+        Operation::Delete,
+        key([("tenant_id", "t1"), ("customer_id", "c1")]),
+        ordering("source_position", 42),
+        checkpoint("batch-0001"),
+        1,
+        fixed_time(),
+        BTreeMap::new(),
+    )
+    .build()
+    .expect("builder should validate the mutation")
 }

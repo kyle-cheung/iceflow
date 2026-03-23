@@ -97,3 +97,12 @@ fn manifest_file_checksum_reflects_content_hash() {
 
     assert_ne!(file.checksum(), changed.checksum());
 }
+
+#[test]
+fn negative_timestamp_preserves_fractional_seconds() {
+    let timestamp: chrono::DateTime<chrono::Utc> =
+        chrono::DateTime::from_timestamp(-1, 500_000_000).expect("valid timestamp");
+
+    assert_eq!(timestamp.timestamp(), -1);
+    assert_eq!(timestamp.timestamp_subsec_nanos(), 500_000_000);
+}

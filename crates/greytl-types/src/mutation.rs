@@ -382,7 +382,11 @@ pub fn validate_mutation(m: &LogicalMutation) -> Result<()> {
         _ => {}
     }
 
-    m.key.validate()?;
+    match m.table_mode {
+        TableMode::KeyedUpsert => m.key.validate()?,
+        TableMode::AppendOnly if !m.key.parts.is_empty() => m.key.validate()?,
+        TableMode::AppendOnly => {}
+    }
 
     Ok(())
 }
@@ -436,5 +440,25 @@ mod tests {
         .build();
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn append_only_allows_empty_key() {
+        let result = LogicalMutation::insert(
+            table_id("orders_events"),
+            "source-a",
+            SourceClass::DatabaseCdc,
+            TableMode::AppendOnly,
+            StructuredKey::new(vec![]),
+            ordering("source_position", 1),
+            checkpoint("batch-0001"),
+            1,
+            now(),
+            BTreeMap::new(),
+        )
+        .with_after(json!({"order_id": "o-1"}))
+        .build();
+
+        assert!(result.is_ok());
     }
 }
