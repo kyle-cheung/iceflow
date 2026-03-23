@@ -214,8 +214,7 @@ REGISTERED
 -> COMMITTED | COMMIT_UNCERTAIN | SCHEMA_REVALIDATING | FAILED_TERMINAL
 
 COMMIT_UNCERTAIN
--> RESOLVING
--> COMMITTED | AMBIGUOUS_MANUAL | SCHEMA_REVALIDATING
+-> COMMITTED | SCHEMA_REVALIDATING | QUARANTINED
 
 SCHEMA_REVALIDATING
 -> RETRY_READY | QUARANTINED
@@ -235,7 +234,11 @@ Attempt-level semantics:
 
 - `failed_retryable` is an attempt status, not a batch status
 - when an attempt is `failed_retryable`, the batch transitions immediately to `schema_revalidating`
-- `RESOLVING`, `failed_retryable`, and `ambiguous_manual` are tracked at the attempt layer even when they affect the next batch transition
+- while a batch remains in `commit_uncertain`, the active attempt may move through `resolving`
+- if attempt resolution returns `committed`, the batch transitions to `committed`
+- if attempt resolution returns `not_committed`, the batch transitions to `schema_revalidating`
+- if attempt resolution returns `ambiguous`, the attempt transitions to `ambiguous_manual` and the batch transitions to `quarantined`
+- `resolving`, `failed_retryable`, and `ambiguous_manual` are tracked at the attempt layer even when they affect the next batch transition
 
 Rules:
 
@@ -576,6 +579,11 @@ Tier 3, local performance and soak tests:
 - state store backend: SQLite in WAL mode
 - Tier 0 and Tier 1 warehouse: local filesystem-backed Iceberg warehouse plus SQLite state store and deterministic sink test doubles
 - Tier 2 warehouse and catalog stack: Polaris plus MinIO plus SQLite state store
+- project reference CI runner class:
+  - Linux x86_64
+  - 8 vCPU
+  - 32 GiB RAM
+  - local SSD-backed workspace storage
 - all performance gates are measured on the project reference CI runner class, not arbitrary developer hardware
 
 ## 10. Backpressure And Queueing Model
@@ -727,6 +735,10 @@ Mapped hypothesis:
 
 - `H1`
 
+Baseline comparison target:
+
+- a reference Python baseline path that commits the same landed-Parquet fixtures using PyIceberg against the same Polaris plus MinIO stack
+
 Pass:
 
 - on identical landed-Parquet fixtures from `reference_workload_v0`, the engine shows a material advantage over a baseline path while preserving correctness guarantees
@@ -825,3 +837,4 @@ Out of scope:
 The next planning draft should answer these implementation-facing questions:
 
 - whether the Rust and DuckDB boundary should remain in-process in v0 or move to a process boundary for containment
+- what exact v0 schema evolution policy applies during initial ingest and retry-time revalidation, including additive columns, safe widening, and incompatible changes
