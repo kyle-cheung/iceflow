@@ -319,8 +319,10 @@ Guarantees:
 Write semantics:
 
 - the engine reduces each batch to the key's latest applicable mutation by ordering field
-- the sink translates logical upserts and tombstones into the supported Iceberg mutation mechanism for the target path
-- v0 requires a path that can prove equality-delete-capable semantics or a functionally equivalent mechanism in the compatibility matrix
+- the v0 reference mutation path is equality-delete-plus-append
+- for every batch, the sink emits equality deletes for all touched keys and appends only the latest surviving `upsert` rows
+- keys whose latest mutation is `delete` emit equality deletes without replacement rows
+- if the DuckDB plus Polaris path cannot implement equality-delete-plus-append correctly, `G2` fails
 
 Allowed logical operations:
 
@@ -334,7 +336,8 @@ Update handling:
 Delete handling:
 
 - deletes are represented logically as key-scoped tombstones
-- the exact delete mechanism is a compatibility-matrix requirement for the chosen engine and catalog path
+- the canonical delete record is `op=delete`, `key` present, `after=null`, and `before` optional
+- the sink derives equality delete files from key columns only
 
 Ordering violations:
 
@@ -372,6 +375,7 @@ Required fields:
 Definitions:
 
 - `key` is a structured composite key, not a pre-hashed surrogate
+- `after` is required for `insert` and `upsert`, and must be `null` for `delete`
 - `before` is reserved for future reconciliation, audit, and richer CDC modes; it is not required by the v0 write path
 - `ordering_field` and `ordering_value` are mandatory for `keyed_upsert`
 - `source_checkpoint` must be durable enough to make replay deterministic
@@ -427,6 +431,7 @@ Arrow batch, in-memory only:
 - `_gb_key_*` columns are the columnar projection of the structured logical `key`
 - an optional `_gb_key_hash` may be added for grouping or partition-local optimization, but it is not the canonical key
 - payload columns are the target-row columns for `after`
+- for `delete` rows, payload columns are null and key plus metadata columns remain populated so the batch stays schema-stable
 
 If a worker crashes before Parquet materialization, the Arrow batch is abandoned and the pipeline restarts from the last durable source checkpoint.
 
@@ -500,6 +505,7 @@ Tier 0, pure unit tests:
 - idempotency key generation and duplicate replay convergence
 - schema-policy evaluation
 - ordering-field validation and quarantine decisions
+- connector SDK lifecycle contract validation
 - canonical event model validation
 - batch manifest validation
 - table-mode validation rules
@@ -510,6 +516,7 @@ Tier 1, deterministic integration tests:
 - local state-store backend
 - deterministic source fixtures, manifest fixtures, schema fixtures, and expected ledger transitions
 - sink test double with failpoints for `commit`, `lookup_commit`, and `resolve_uncertain_commit`
+- contract tests for sink and commit protocol behavior against the deterministic test double
 - required failure-path coverage:
   - commit succeeds but ack is lost
   - commit fails after files are written
@@ -524,14 +531,14 @@ Tier 2, real catalog and object-store integration tests:
 - single-node local stack
 - local object store or filesystem-backed warehouse
 - local catalog target where possible
-- v0 reference stack should target Polaris plus local object store when practical
+- v0 reference stack is Polaris plus MinIO plus SQLite state store
 - reuse the same fixtures and expected outcomes as Tier 1
 - required contract coverage:
   - sink and commit protocol behavior against the real catalog
   - `append_only` mode behavior
   - constrained `keyed_upsert` behavior
   - catalog-visible uncertain-commit resolution
-  - delete or update path viability for the chosen `keyed_upsert` mechanism
+  - equality-delete-plus-append viability for constrained `keyed_upsert`
 
 Tier 3, local performance and soak tests:
 
@@ -563,6 +570,13 @@ Tier 3, local performance and soak tests:
 - stable fixture manifests and expected ledger snapshots
 - no test may depend on wall-clock sleeps for correctness
 - if a failure mode cannot be simulated locally, treat that as a design smell unless there is a strong reason otherwise
+
+### 9.5 V0 Reference Stack
+
+- state store backend: SQLite in WAL mode
+- Tier 0 and Tier 1 warehouse: local filesystem-backed Iceberg warehouse plus SQLite state store and deterministic sink test doubles
+- Tier 2 warehouse and catalog stack: Polaris plus MinIO plus SQLite state store
+- all performance gates are measured on the project reference CI runner class, not arbitrary developer hardware
 
 ## 10. Backpressure And Queueing Model
 
@@ -657,16 +671,42 @@ Two benchmark inputs are required before measurement begins:
 - `reference_workload_v0`
 - `R_target_v0`
 
-`reference_workload_v0` must define at least:
+For v0, these inputs are fixed as follows.
 
-- one `append_only` table and one `keyed_upsert` table
-- fixed schema width and approximate row width
-- fixed batch size and batch count
-- fixed source-ordering characteristics
-- fixed failure-injection scenarios
-- fixed local catalog and object-store stack
+`reference_workload_v0`:
 
-`R_target_v0` must define the minimum acceptable steady-state throughput target for the single-writer runtime on the chosen reference workload.
+- `append_only.orders_events`
+- 100 batches x 25,000 rows per batch
+- 24 columns
+- approximate row width `512 bytes`
+- ingestion-day partitioning
+
+- `keyed_upsert.customer_state`
+- 100 batches x 10,000 rows per batch
+- composite key `(tenant_id, customer_id)`
+- 18 columns
+- approximate row width `768 bytes`
+- ordered by monotonically increasing `source_position`
+- 20% updates to existing keys
+- 10% deletes
+- ingestion-day partitioning
+
+- failure injection on fixed batch numbers for:
+  - commit succeeds but ack is lost
+  - commit fails after files are written
+  - worker crash between file write and commit resolution
+  - schema change before retry
+
+- reference local stack for gate measurement:
+  - Polaris
+  - MinIO
+  - SQLite state store
+
+`R_target_v0`:
+
+- `25,000` committed rows per second per active table on the project reference CI runner class
+
+These values are normative for v0 unless deliberately revised in a later spec update.
 
 ### G0. Correctness Gate
 
@@ -767,7 +807,7 @@ In scope:
 - durable control plane and commit ledger
 - Parquet batch plus manifest replay boundary
 - deterministic local failure injection
-- local real-stack testing with a single-node catalog and object-store setup where practical
+- local real-stack testing with the Polaris plus MinIO plus SQLite reference stack
 - reconciliation and orphan cleanup
 - offline compaction utility
 
@@ -780,13 +820,8 @@ Out of scope:
 - rename or drop schema automation
 - partition evolution and advanced clustering
 
-## 14. Next Planning Inputs
+## 14. Remaining Planning Questions
 
 The next planning draft should answer these implementation-facing questions:
 
-- what concrete state-store backend will serve as the v0 local and CI reference
-- what exact local catalog and object-store stack will serve as the Tier 2 default
-- what delete path will be used for constrained `keyed_upsert` in the DuckDB plus Polaris matrix
-- what concrete values define `reference_workload_v0`
-- what concrete target defines `R_target_v0`
 - whether the Rust and DuckDB boundary should remain in-process in v0 or move to a process boundary for containment
