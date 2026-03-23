@@ -159,6 +159,16 @@ fn mark_attempt_resolving_moves_batch_to_commit_uncertain() -> Result<()> {
     })
 }
 
+#[test]
+fn sqlite_connections_use_full_synchronous_mode() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+
+        assert_eq!(store.synchronous_mode().await?, 2);
+        Ok(())
+    })
+}
+
 fn sample_commit_request() -> CommitRequest {
     CommitRequest {
         destination_uri: "s3://warehouse/customer_state".to_string(),

@@ -163,6 +163,18 @@ impl SqliteStateStore {
             update_batch_status(transaction, batch_id.as_str(), BatchStatus::RetryReady)
         })
     }
+
+    pub async fn synchronous_mode(&self) -> Result<u32> {
+        let conn = Connection::open(&self.path)?;
+        let mut stmt = conn.prepare("PRAGMA synchronous")?;
+        if step_row(&mut stmt)? {
+            let value = stmt.column_u32(0)?;
+            step_done(&mut stmt)?;
+            Ok(value)
+        } else {
+            Err(Error::msg("PRAGMA synchronous returned no row"))
+        }
+    }
 }
 
 impl Drop for SqliteStateStore {
@@ -540,6 +552,7 @@ impl Connection {
         }
         let connection = Self { raw };
         connection.exec("PRAGMA foreign_keys = ON;")?;
+        connection.exec("PRAGMA synchronous = FULL;")?;
         Ok(connection)
     }
 
