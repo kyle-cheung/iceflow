@@ -45,6 +45,10 @@ pub fn evaluate_schema_policy(current: &Schema, next: &Schema) -> SchemaDecision
         return SchemaDecision::Quarantine("key-column-type-change");
     }
 
+    if key_column_membership_or_order_changed(current, next) {
+        return SchemaDecision::Quarantine("key-column-membership-or-order-change");
+    }
+
     if only_additive_or_allowed_widening(current, next) {
         SchemaDecision::Allow
     } else {
@@ -61,6 +65,10 @@ pub fn key_column_type_changed(current: &Schema, next: &Schema) -> bool {
             _ => false,
         }
     })
+}
+
+pub fn key_column_membership_or_order_changed(current: &Schema, next: &Schema) -> bool {
+    current.key_columns != next.key_columns
 }
 
 pub fn only_additive_or_allowed_widening(current: &Schema, next: &Schema) -> bool {
@@ -87,25 +95,118 @@ fn is_allowed_widening(current: &DataType, next: &DataType) -> bool {
 mod tests {
     use super::*;
 
-    fn schema_with_key(name: &str, data_type: DataType) -> Schema {
+    fn schema_with_keys(columns: Vec<SchemaColumn>, key_columns: Vec<&str>) -> Schema {
         Schema::new(
-            vec![SchemaColumn {
-                name: name.to_string(),
-                data_type,
-                nullable: false,
-            }],
-            vec![name.to_string()],
+            columns,
+            key_columns.into_iter().map(|key| key.to_string()).collect(),
         )
     }
 
     #[test]
     fn schema_policy_rejects_key_column_widening() {
-        let current = schema_with_key("customer_id", DataType::Int32);
-        let next = schema_with_key("customer_id", DataType::Int64);
+        let current = schema_with_keys(
+            vec![SchemaColumn {
+                name: "customer_id".to_string(),
+                data_type: DataType::Int32,
+                nullable: false,
+            }],
+            vec!["customer_id"],
+        );
+        let next = schema_with_keys(
+            vec![SchemaColumn {
+                name: "customer_id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+            }],
+            vec!["customer_id"],
+        );
 
         assert_eq!(
             evaluate_schema_policy(&current, &next),
             SchemaDecision::Quarantine("key-column-type-change")
+        );
+    }
+
+    #[test]
+    fn schema_policy_rejects_key_column_set_change() {
+        let current = schema_with_keys(
+            vec![
+                SchemaColumn {
+                    name: "tenant_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+                SchemaColumn {
+                    name: "customer_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+            ],
+            vec!["tenant_id", "customer_id"],
+        );
+        let next = schema_with_keys(
+            vec![
+                SchemaColumn {
+                    name: "tenant_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+                SchemaColumn {
+                    name: "customer_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+                SchemaColumn {
+                    name: "region_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+            ],
+            vec!["tenant_id", "customer_id", "region_id"],
+        );
+
+        assert_eq!(
+            evaluate_schema_policy(&current, &next),
+            SchemaDecision::Quarantine("key-column-membership-or-order-change")
+        );
+    }
+
+    #[test]
+    fn schema_policy_rejects_key_column_order_change() {
+        let current = schema_with_keys(
+            vec![
+                SchemaColumn {
+                    name: "tenant_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+                SchemaColumn {
+                    name: "customer_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+            ],
+            vec!["tenant_id", "customer_id"],
+        );
+        let next = schema_with_keys(
+            vec![
+                SchemaColumn {
+                    name: "tenant_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+                SchemaColumn {
+                    name: "customer_id".to_string(),
+                    data_type: DataType::String,
+                    nullable: false,
+                },
+            ],
+            vec!["customer_id", "tenant_id"],
+        );
+
+        assert_eq!(
+            evaluate_schema_policy(&current, &next),
+            SchemaDecision::Quarantine("key-column-membership-or-order-change")
         );
     }
 }

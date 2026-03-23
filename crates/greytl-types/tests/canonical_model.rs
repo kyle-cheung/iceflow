@@ -98,6 +98,19 @@ fn validate_mutation_rejects_non_adjacent_duplicate_key_parts() {
 }
 
 #[test]
+fn structured_key_preserves_caller_order() {
+    let structured = key([("tenant_id", "t1"), ("customer_id", "c1")]);
+
+    let names: Vec<_> = structured
+        .parts
+        .iter()
+        .map(|part| part.name.as_str())
+        .collect();
+
+    assert_eq!(names, vec!["tenant_id", "customer_id"]);
+}
+
+#[test]
 fn schema_policy_rejects_key_column_widening() {
     let current = schema_with_key("customer_id", DataType::Int32);
     let next = schema_with_key("customer_id", DataType::Int64);

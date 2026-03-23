@@ -47,14 +47,13 @@ impl StructuredKey {
         K: Into<String>,
         V: Into<Value>,
     {
-        let mut parts: Vec<_> = pairs
+        let parts: Vec<_> = pairs
             .into_iter()
             .map(|(name, value)| KeyPart {
                 name: name.into(),
                 value: value.into(),
             })
             .collect();
-        parts.sort_by(|left, right| left.name.cmp(&right.name));
         Self { parts }
     }
 
