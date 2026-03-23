@@ -284,7 +284,7 @@ The reconciler must:
 
 Table behavior is defined by named modes. In v0, the runtime policy is single active writer per table. That reduces catalog conflict handling while the system proves commit, recovery, replay, and checkpoint correctness. The protocol remains compatible with future multi-writer support because commit identity and resolution are explicit rather than implied by exclusivity.
 
-V0 must fully implement `append_only`. V0 may implement `keyed_upsert` only as a constrained first-class mode under ordered fixtures and ordered-source contracts. V1 must support both modes as first-class behaviors.
+V0 must fully implement `append_only`. V0 must implement `keyed_upsert` as a constrained first-class mode under ordered fixtures and ordered-source contracts. V1 must support both modes as first-class behaviors.
 
 ### 6.1 `append_only`
 
