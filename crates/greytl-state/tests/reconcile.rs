@@ -38,6 +38,42 @@ fn quarantined_batch_files_become_orphans_until_cleanup_is_recorded() -> Result<
     })
 }
 
+#[test]
+fn record_files_rejects_mismatched_batch_ids() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+        let batch_id = store.register_batch(sample_manifest()).await?;
+        let wrong_batch_id = BatchId::from("batch-9999");
+
+        assert!(store
+            .record_files(batch_id.clone(), sample_batch_files(&wrong_batch_id))
+            .await
+            .is_err());
+        assert_eq!(
+            store.batch_status(batch_id).await?,
+            greytl_state::BatchStatus::Registered
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn cleanup_requires_a_known_batch_file() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+        let batch_id = BatchId::from("batch-unknown");
+        let file = sample_batch_files(&batch_id)
+            .pop()
+            .expect("fixture batch file");
+
+        assert!(store
+            .record_cleanup(file, CleanupAction::Deleted)
+            .await
+            .is_err());
+        Ok(())
+    })
+}
+
 fn sample_commit_request() -> CommitRequest {
     CommitRequest {
         destination_uri: "s3://warehouse/customer_state".to_string(),

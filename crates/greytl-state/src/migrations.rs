@@ -3,12 +3,6 @@ use anyhow::{Error, Result};
 
 const MIGRATIONS: &[&str] = &[
     "
-    PRAGMA journal_mode = WAL;
-    ",
-    "
-    PRAGMA synchronous = FULL;
-    ",
-    "
     CREATE TABLE IF NOT EXISTS batches (
         batch_id TEXT PRIMARY KEY,
         table_id TEXT NOT NULL,
@@ -105,10 +99,12 @@ const MIGRATIONS: &[&str] = &[
 ];
 
 pub(crate) fn apply(conn: &Connection) -> Result<()> {
-    for migration in MIGRATIONS {
-        conn.exec(migration)?;
-    }
-    Ok(())
+    conn.with_transaction(|transaction| {
+        for migration in MIGRATIONS {
+            transaction.exec(migration)?;
+        }
+        Ok(())
+    })
 }
 
 pub(crate) fn invalid_data(message: impl Into<String>) -> Error {

@@ -86,6 +86,8 @@ impl SqliteStateStore {
         let path = next_db_path();
         let store = Self { path };
         let conn = Connection::open(&store.path)?;
+        conn.exec("PRAGMA journal_mode = WAL;")?;
+        conn.exec("PRAGMA synchronous = FULL;")?;
         apply_migrations(&conn)?;
         Ok(store)
     }
@@ -134,18 +136,32 @@ impl SqliteStateStore {
         status: AttemptStatus,
     ) -> Result<()> {
         let conn = Connection::open(&self.path)?;
-        let mut stmt =
-            conn.prepare("UPDATE commit_attempts SET attempt_status = ?1 WHERE attempt_id = ?2")?;
-        stmt.bind_text(1, status.as_str())?;
-        stmt.bind_text(2, attempt_id.as_str())?;
-        step_done(&mut stmt)?;
+        conn.with_transaction(|transaction| {
+            let mut stmt = transaction
+                .prepare("UPDATE commit_attempts SET attempt_status = ?1 WHERE attempt_id = ?2")?;
+            stmt.bind_text(1, status.as_str())?;
+            stmt.bind_text(2, attempt_id.as_str())?;
+            step_done(&mut stmt)?;
 
-        if matches!(status, AttemptStatus::Resolving | AttemptStatus::Unknown) {
-            let batch_id = select_attempt_batch_id(&conn, attempt_id.as_str())?;
-            update_batch_status(&conn, &batch_id, BatchStatus::CommitUncertain)?;
-        }
+            if matches!(status, AttemptStatus::Resolving | AttemptStatus::Unknown) {
+                let batch_id = select_attempt_batch_id(transaction, attempt_id.as_str())?;
+                update_batch_status(transaction, &batch_id, BatchStatus::CommitUncertain)?;
+            }
 
-        Ok(())
+            Ok(())
+        })
+    }
+
+    pub async fn mark_attempt_resolving(&self, attempt_id: CommitAttemptId) -> Result<()> {
+        self.force_attempt_status(attempt_id, AttemptStatus::Resolving)
+            .await
+    }
+
+    pub async fn mark_retry_ready(&self, batch_id: BatchId) -> Result<()> {
+        let conn = Connection::open(&self.path)?;
+        conn.with_transaction(|transaction| {
+            update_batch_status(transaction, batch_id.as_str(), BatchStatus::RetryReady)
+        })
     }
 }
 
@@ -194,72 +210,81 @@ impl StateStore for SqliteStateStore {
 
     async fn record_files(&self, batch_id: BatchId, files: Vec<BatchFile>) -> Result<()> {
         let conn = Connection::open(&self.path)?;
-        for file in files {
-            let mut stmt = conn.prepare(
-                "INSERT OR REPLACE INTO batch_files (
-                    batch_id, file_uri, file_kind, content_hash, file_size_bytes,
-                    record_count, created_at_secs, created_at_nanos
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            )?;
-            stmt.bind_text(1, file.batch_id.as_str())?;
-            stmt.bind_text(2, &file.file_uri)?;
-            stmt.bind_text(3, &file.file_kind)?;
-            stmt.bind_text(4, &file.content_hash)?;
-            stmt.bind_i64(5, file.file_size_bytes as i64)?;
-            stmt.bind_i64(6, file.record_count as i64)?;
-            bind_timestamp(&mut stmt, 7, &file.created_at)?;
-            step_done(&mut stmt)?;
-        }
+        conn.with_transaction(|transaction| {
+            for file in files {
+                if file.batch_id != batch_id {
+                    return Err(Error::msg(
+                        "record_files received a file for the wrong batch",
+                    ));
+                }
 
-        let current = self.batch_status(batch_id.clone()).await?;
-        if current == BatchStatus::Registered {
-            update_batch_status(&conn, batch_id.as_str(), BatchStatus::FilesWritten)?;
-        }
-        Ok(())
+                let mut stmt = transaction.prepare(
+                    "INSERT OR REPLACE INTO batch_files (
+                        batch_id, file_uri, file_kind, content_hash, file_size_bytes,
+                        record_count, created_at_secs, created_at_nanos
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                )?;
+                stmt.bind_text(1, batch_id.as_str())?;
+                stmt.bind_text(2, &file.file_uri)?;
+                stmt.bind_text(3, &file.file_kind)?;
+                stmt.bind_text(4, &file.content_hash)?;
+                stmt.bind_i64(5, file.file_size_bytes as i64)?;
+                stmt.bind_i64(6, file.record_count as i64)?;
+                bind_timestamp(&mut stmt, 7, &file.created_at)?;
+                step_done(&mut stmt)?;
+            }
+
+            if current_batch_status(transaction, batch_id.as_str())? == BatchStatus::Registered {
+                update_batch_status(transaction, batch_id.as_str(), BatchStatus::FilesWritten)?;
+            }
+            Ok(())
+        })
     }
 
     async fn begin_commit(&self, batch_id: BatchId, req: CommitRequest) -> Result<CommitAttempt> {
         let conn = Connection::open(&self.path)?;
-        let attempt_no = next_attempt_no(&conn, batch_id.as_str())?;
-        let attempt_id =
-            CommitAttemptId::from(format!("{}-attempt-{attempt_no:04}", batch_id.as_str()));
-        let idempotency_key = format!("{}:{attempt_no}", batch_id.as_str());
-        let request_payload_hash = stable_hash([
-            batch_id.to_string(),
-            req.destination_uri.clone(),
-            req.snapshot.uri.clone(),
-            req.actor.clone(),
-        ]);
+        conn.with_transaction(|transaction| {
+            let attempt_no = next_attempt_no(transaction, batch_id.as_str())?;
+            let attempt_id =
+                CommitAttemptId::from(format!("{}-attempt-{attempt_no:04}", batch_id.as_str()));
+            let idempotency_key = format!("{}:{attempt_no}", batch_id.as_str());
+            let request_payload_hash = stable_hash([
+                batch_id.to_string(),
+                req.destination_uri.clone(),
+                req.snapshot.uri.clone(),
+                req.actor.clone(),
+            ]);
 
-        let mut stmt = conn.prepare(
-            "INSERT INTO commit_attempts (
-                attempt_id, batch_id, attempt_no, destination_uri, snapshot_uri,
-                actor, idempotency_key, request_payload_hash, attempt_status,
-                resolved_at_secs, resolved_at_nanos
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL)",
-        )?;
-        stmt.bind_text(1, attempt_id.as_str())?;
-        stmt.bind_text(2, batch_id.as_str())?;
-        stmt.bind_i64(3, i64::from(attempt_no))?;
-        stmt.bind_text(4, &req.destination_uri)?;
-        stmt.bind_text(5, &req.snapshot.uri)?;
-        stmt.bind_text(6, &req.actor)?;
-        stmt.bind_text(7, &idempotency_key)?;
-        stmt.bind_text(8, &request_payload_hash)?;
-        stmt.bind_text(9, AttemptStatus::Started.as_str())?;
-        step_done(&mut stmt)?;
+            let mut stmt = transaction.prepare(
+                "INSERT INTO commit_attempts (
+                    attempt_id, batch_id, attempt_no, destination_uri, snapshot_uri,
+                    actor, idempotency_key, request_payload_hash, attempt_status,
+                    resolved_at_secs, resolved_at_nanos
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL)",
+            )?;
+            stmt.bind_text(1, attempt_id.as_str())?;
+            stmt.bind_text(2, batch_id.as_str())?;
+            stmt.bind_i64(3, i64::from(attempt_no))?;
+            stmt.bind_text(4, &req.destination_uri)?;
+            stmt.bind_text(5, &req.snapshot.uri)?;
+            stmt.bind_text(6, &req.actor)?;
+            stmt.bind_text(7, &idempotency_key)?;
+            stmt.bind_text(8, &request_payload_hash)?;
+            stmt.bind_text(9, AttemptStatus::Started.as_str())?;
+            step_done(&mut stmt)?;
 
-        update_batch_status(&conn, batch_id.as_str(), BatchStatus::CommitStarted)?;
+            update_batch_status(transaction, batch_id.as_str(), BatchStatus::CommitStarted)?;
 
-        Ok(CommitAttempt {
-            id: attempt_id,
-            batch_id,
-            attempt_no,
-            destination_uri: req.destination_uri,
-            snapshot: req.snapshot,
-            actor: req.actor,
-            idempotency_key,
-            status: AttemptStatus::Started,
+            Ok(CommitAttempt {
+                id: attempt_id,
+                batch_id,
+                attempt_no,
+                destination_uri: req.destination_uri,
+                snapshot: req.snapshot,
+                actor: req.actor,
+                idempotency_key,
+                status: AttemptStatus::Started,
+            })
         })
     }
 
@@ -269,24 +294,26 @@ impl StateStore for SqliteStateStore {
         resolution: AttemptResolution,
     ) -> Result<()> {
         let conn = Connection::open(&self.path)?;
-        let batch_id = select_attempt_batch_id(&conn, attempt_id.as_str())?;
-        let (attempt_status, batch_status, quarantine_reason) = resolve_attempt(resolution);
+        conn.with_transaction(|transaction| {
+            let batch_id = select_attempt_batch_id(transaction, attempt_id.as_str())?;
+            let (attempt_status, batch_status, quarantine_reason) = resolve_attempt(resolution);
 
-        let mut stmt = conn.prepare(
-            "UPDATE commit_attempts
-             SET attempt_status = ?1, resolved_at_secs = ?2, resolved_at_nanos = ?3
-             WHERE attempt_id = ?4",
-        )?;
-        stmt.bind_text(1, attempt_status.as_str())?;
-        bind_timestamp(&mut stmt, 2, &Utc::now())?;
-        stmt.bind_text(4, attempt_id.as_str())?;
-        step_done(&mut stmt)?;
+            let mut stmt = transaction.prepare(
+                "UPDATE commit_attempts
+                 SET attempt_status = ?1, resolved_at_secs = ?2, resolved_at_nanos = ?3
+                 WHERE attempt_id = ?4",
+            )?;
+            stmt.bind_text(1, attempt_status.as_str())?;
+            bind_timestamp(&mut stmt, 2, &Utc::now())?;
+            stmt.bind_text(4, attempt_id.as_str())?;
+            step_done(&mut stmt)?;
 
-        update_batch_status(&conn, &batch_id, batch_status)?;
-        if let Some(reason) = quarantine_reason {
-            write_quarantine_record(&conn, &batch_id, reason)?;
-        }
-        Ok(())
+            update_batch_status(transaction, &batch_id, batch_status)?;
+            if let Some(reason) = quarantine_reason {
+                write_quarantine_record(transaction, &batch_id, reason)?;
+            }
+            Ok(())
+        })
     }
 
     async fn link_checkpoint_pending(
@@ -296,64 +323,75 @@ impl StateStore for SqliteStateStore {
         snapshot: SnapshotRef,
     ) -> Result<()> {
         let conn = Connection::open(&self.path)?;
-        let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO checkpoint_links (
-                batch_id, source_id, checkpoint_id, snapshot_uri, ack_status,
-                linked_at_secs, linked_at_nanos
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        )?;
-        stmt.bind_text(1, batch_id.as_str())?;
-        stmt.bind_text(2, &cp.source_id)?;
-        stmt.bind_text(3, cp.checkpoint.as_str())?;
-        stmt.bind_text(4, &snapshot.uri)?;
-        stmt.bind_text(5, "pending")?;
-        bind_timestamp(&mut stmt, 6, &Utc::now())?;
-        step_done(&mut stmt)?;
-        update_batch_status(&conn, batch_id.as_str(), BatchStatus::CheckpointPending)?;
-        Ok(())
+        conn.with_transaction(|transaction| {
+            let mut stmt = transaction.prepare(
+                "INSERT OR REPLACE INTO checkpoint_links (
+                    batch_id, source_id, checkpoint_id, snapshot_uri, ack_status,
+                    linked_at_secs, linked_at_nanos
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            stmt.bind_text(1, batch_id.as_str())?;
+            stmt.bind_text(2, &cp.source_id)?;
+            stmt.bind_text(3, cp.checkpoint.as_str())?;
+            stmt.bind_text(4, &snapshot.uri)?;
+            stmt.bind_text(5, "pending")?;
+            bind_timestamp(&mut stmt, 6, &Utc::now())?;
+            step_done(&mut stmt)?;
+            update_batch_status(
+                transaction,
+                batch_id.as_str(),
+                BatchStatus::CheckpointPending,
+            )?;
+            Ok(())
+        })
     }
 
     async fn mark_checkpoint_durable(&self, batch_id: BatchId, ack: CheckpointAck) -> Result<()> {
         let conn = Connection::open(&self.path)?;
-        let mut query = conn.prepare(
-            "SELECT source_id, checkpoint_id, snapshot_uri
-             FROM checkpoint_links
-             WHERE batch_id = ?1 AND ack_status = 'pending'",
-        )?;
-        query.bind_text(1, batch_id.as_str())?;
-        if !step_row(&mut query)? {
-            return Err(Error::msg(format!(
-                "pending checkpoint link not found for batch {}",
-                batch_id.as_str()
-            )));
-        }
+        conn.with_transaction(|transaction| {
+            let mut query = transaction.prepare(
+                "SELECT source_id, checkpoint_id, snapshot_uri
+                 FROM checkpoint_links
+                 WHERE batch_id = ?1 AND ack_status = 'pending'",
+            )?;
+            query.bind_text(1, batch_id.as_str())?;
+            if !step_row(&mut query)? {
+                return Err(Error::msg(format!(
+                    "pending checkpoint link not found for batch {}",
+                    batch_id.as_str()
+                )));
+            }
 
-        let source_id = query.column_text(0)?;
-        let checkpoint_id = query.column_text(1)?;
-        let snapshot_uri = query.column_text(2)?;
-        step_done(&mut query)?;
+            let source_id = query.column_text(0)?;
+            let checkpoint_id = query.column_text(1)?;
+            let snapshot_uri = query.column_text(2)?;
+            step_done(&mut query)?;
 
-        if source_id != ack.source_id
-            || checkpoint_id != ack.checkpoint.as_str()
-            || snapshot_uri != ack.snapshot.uri
-        {
-            return Err(Error::msg(
-                "checkpoint durable ack does not match pending link",
-            ));
-        }
+            if source_id != ack.source_id
+                || checkpoint_id != ack.checkpoint.as_str()
+                || snapshot_uri != ack.snapshot.uri
+            {
+                return Err(Error::msg(
+                    "checkpoint durable ack does not match pending link",
+                ));
+            }
 
-        let mut stmt =
-            conn.prepare("UPDATE checkpoint_links SET ack_status = 'durable' WHERE batch_id = ?1")?;
-        stmt.bind_text(1, batch_id.as_str())?;
-        step_done(&mut stmt)?;
-        update_batch_status(&conn, batch_id.as_str(), BatchStatus::Checkpointed)?;
-        Ok(())
+            let mut stmt = transaction.prepare(
+                "UPDATE checkpoint_links SET ack_status = 'durable' WHERE batch_id = ?1",
+            )?;
+            stmt.bind_text(1, batch_id.as_str())?;
+            step_done(&mut stmt)?;
+            update_batch_status(transaction, batch_id.as_str(), BatchStatus::Checkpointed)?;
+            Ok(())
+        })
     }
 
     async fn mark_quarantine(&self, batch_id: BatchId, reason: QuarantineReason) -> Result<()> {
         let conn = Connection::open(&self.path)?;
-        update_batch_status(&conn, batch_id.as_str(), BatchStatus::Quarantined)?;
-        write_quarantine_record(&conn, batch_id.as_str(), reason)
+        conn.with_transaction(|transaction| {
+            update_batch_status(transaction, batch_id.as_str(), BatchStatus::Quarantined)?;
+            write_quarantine_record(transaction, batch_id.as_str(), reason)
+        })
     }
 
     async fn list_recovery_candidates(&self) -> Result<Vec<BatchId>> {
@@ -500,7 +538,29 @@ impl Connection {
             }
             return Err(Error::msg(message));
         }
-        Ok(Self { raw })
+        let connection = Self { raw };
+        connection.exec("PRAGMA foreign_keys = ON;")?;
+        Ok(connection)
+    }
+
+    pub(crate) fn with_transaction<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T>,
+    ) -> Result<T> {
+        self.exec("BEGIN IMMEDIATE")?;
+        match f(self) {
+            Ok(value) => {
+                if let Err(error) = self.exec("COMMIT") {
+                    let _ = self.exec("ROLLBACK");
+                    return Err(error);
+                }
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self.exec("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 
     pub(crate) fn exec(&self, sql: &str) -> Result<()> {
@@ -619,11 +679,15 @@ impl Statement<'_> {
     }
 
     pub(crate) fn column_u64(&self, index: c_int) -> Result<u64> {
-        Ok(self.column_i64(index)? as u64)
+        self.column_i64(index)?
+            .try_into()
+            .map_err(|_| invalid_data(format!("column {index} is out of range for u64")))
     }
 
     pub(crate) fn column_u32(&self, index: c_int) -> Result<u32> {
-        Ok(self.column_i64(index)? as u32)
+        self.column_i64(index)?
+            .try_into()
+            .map_err(|_| invalid_data(format!("column {index} is out of range for u32")))
     }
 }
 
@@ -676,5 +740,18 @@ fn sqlite_error(db: *mut sqlite3, context: &str) -> String {
             "{context}: {}",
             unsafe { CStr::from_ptr(message) }.to_string_lossy()
         )
+    }
+}
+
+fn current_batch_status(conn: &Connection, batch_id: &str) -> Result<BatchStatus> {
+    let mut stmt = conn.prepare("SELECT batch_status FROM batches WHERE batch_id = ?1")?;
+    stmt.bind_text(1, batch_id)?;
+    if step_row(&mut stmt)? {
+        let value = stmt.column_text(0)?;
+        step_done(&mut stmt)?;
+        BatchStatus::from_str(&value)
+            .ok_or_else(|| invalid_data(format!("unknown batch status: {value}")))
+    } else {
+        Err(Error::msg(format!("batch not found: {batch_id}")))
     }
 }

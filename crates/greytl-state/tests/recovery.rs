@@ -107,6 +107,58 @@ fn resolving_attempts_are_recovery_candidates() -> Result<()> {
     })
 }
 
+#[test]
+fn failed_retryable_commits_require_revalidation_before_retry() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+        let batch_id = store.register_batch(sample_manifest()).await?;
+        let attempt = store
+            .begin_commit(batch_id.clone(), sample_commit_request())
+            .await?;
+
+        store
+            .resolve_commit(attempt.id.clone(), AttemptResolution::FailedRetryable)
+            .await?;
+
+        assert_eq!(
+            store.batch_status(batch_id.clone()).await?,
+            BatchStatus::SchemaRevalidating
+        );
+        assert_eq!(
+            store.attempt_status(attempt.id).await?,
+            AttemptStatus::FailedRetryable
+        );
+
+        store.mark_retry_ready(batch_id.clone()).await?;
+
+        assert_eq!(store.batch_status(batch_id).await?, BatchStatus::RetryReady);
+        Ok(())
+    })
+}
+
+#[test]
+fn mark_attempt_resolving_moves_batch_to_commit_uncertain() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+        let batch_id = store.register_batch(sample_manifest()).await?;
+        let attempt = store
+            .begin_commit(batch_id.clone(), sample_commit_request())
+            .await?;
+
+        store.mark_attempt_resolving(attempt.id.clone()).await?;
+
+        assert_eq!(
+            store.attempt_status(attempt.id).await?,
+            AttemptStatus::Resolving
+        );
+        assert_eq!(
+            store.batch_status(batch_id).await?,
+            BatchStatus::CommitUncertain
+        );
+        Ok(())
+    })
+}
+
 fn sample_commit_request() -> CommitRequest {
     CommitRequest {
         destination_uri: "s3://warehouse/customer_state".to_string(),
