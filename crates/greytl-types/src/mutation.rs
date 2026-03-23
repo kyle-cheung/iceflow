@@ -2,7 +2,7 @@ use crate::ids::{CheckpointId, TableId};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceClass {
@@ -63,15 +63,14 @@ impl StructuredKey {
             anyhow::bail!("key is required");
         }
 
-        let mut previous_name: Option<&str> = None;
+        let mut seen = BTreeSet::new();
         for part in &self.parts {
             if part.name.trim().is_empty() {
                 anyhow::bail!("key part name is required");
             }
-            if previous_name == Some(part.name.as_str()) {
+            if !seen.insert(part.name.as_str()) {
                 anyhow::bail!("key part names must be unique");
             }
-            previous_name = Some(&part.name);
         }
 
         Ok(())

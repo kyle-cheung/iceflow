@@ -1,6 +1,7 @@
 use greytl_types::{
     checkpoint, evaluate_schema_policy, key, ordering, table_id, validate_mutation, DataType,
-    LogicalMutation, Operation, Schema, SchemaColumn, SchemaDecision, SourceClass, TableMode,
+    KeyPart, LogicalMutation, Operation, Schema, SchemaColumn, SchemaDecision, SourceClass,
+    StructuredKey, TableMode,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -53,6 +54,41 @@ fn validate_mutation_rejects_missing_canonical_metadata() {
         ordering("", 42),
         checkpoint(""),
         0,
+        fixed_time(),
+        BTreeMap::new(),
+    )
+    .build();
+
+    assert!(validate_mutation(&mutation).is_err());
+}
+
+#[test]
+fn validate_mutation_rejects_non_adjacent_duplicate_key_parts() {
+    let key = StructuredKey::new(vec![
+        KeyPart {
+            name: "tenant_id".to_string(),
+            value: json!("t1"),
+        },
+        KeyPart {
+            name: "customer_id".to_string(),
+            value: json!("c1"),
+        },
+        KeyPart {
+            name: "tenant_id".to_string(),
+            value: json!("t2"),
+        },
+    ]);
+
+    let mutation = LogicalMutation::builder(
+        table_id("customer_state"),
+        "source-a",
+        SourceClass::DatabaseCdc,
+        TableMode::KeyedUpsert,
+        Operation::Delete,
+        key,
+        ordering("source_position", 42),
+        checkpoint("batch-0001"),
+        1,
         fixed_time(),
         BTreeMap::new(),
     )
