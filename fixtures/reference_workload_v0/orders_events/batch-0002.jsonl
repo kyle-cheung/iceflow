@@ -1,0 +1,2 @@
+{"ordering_value":12,"op":"insert","key":{},"after":{"order_id":"order-003","status":"created"},"before":null,"source_event_id":"orders-events-0003","source_checkpoint":"cp-0012","schema_version":1,"ingestion_ts":12,"source_metadata":{"batch":"0002","workload":"orders_events"}}
+{"ordering_value":13,"op":"insert","key":{},"after":{"order_id":"order-004","status":"created"},"before":null,"source_event_id":"orders-events-0004","source_checkpoint":"cp-0013","schema_version":1,"ingestion_ts":13,"source_metadata":{"batch":"0002","workload":"orders_events"}}
