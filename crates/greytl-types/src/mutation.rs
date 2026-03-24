@@ -106,6 +106,18 @@ impl StructuredKey {
     }
 }
 
+pub fn structured_key_identity(key: &StructuredKey) -> String {
+    if key.parts.is_empty() {
+        return String::new();
+    }
+
+    key.parts
+        .iter()
+        .map(|part| format!("{}={:?}", part.name, part.value))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ordering {
     pub field: String,

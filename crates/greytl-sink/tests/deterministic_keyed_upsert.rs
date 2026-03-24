@@ -141,7 +141,7 @@ fn sample_ordering_violation_batch() -> SourceBatch {
 }
 
 fn sample_keyed_upsert_commit_request(schema_fingerprint: &str) -> CommitRequest {
-    let source_file_uri = sample_source_file_uri("keyed-upsert");
+    let source_file_uri = support::sample_source_file_uri("keyed-upsert");
     CommitRequest {
         batch_id: BatchId::from("batch-keyed-upsert-0001"),
         destination_uri: "file:///tmp/warehouse/customer_state".to_string(),
@@ -166,10 +166,10 @@ fn sample_keyed_upsert_commit_request(schema_fingerprint: &str) -> CommitRequest
                 content_hash: "hash-keyed-upsert".to_string(),
                 file_size_bytes: 128,
                 record_count: 3,
-                created_at: fixed_time(1),
+                created_at: support::fixed_time(1),
             }],
             content_hash: "content-keyed-upsert".to_string(),
-            created_at: fixed_time(2),
+            created_at: support::fixed_time(2),
         },
         idempotency_key: IdempotencyKey::from("batch-keyed-upsert-0001:keyed-upsert"),
     }
@@ -194,7 +194,7 @@ fn keyed_upsert(
         ordering("source_position", ordering_value),
         checkpoint(format!("cp-{ordering_value}")),
         1,
-        fixed_time(1),
+        support::fixed_time(1),
         BTreeMap::new(),
     );
 
@@ -214,23 +214,11 @@ fn keyed_delete(customer_id: i64, ordering_value: i64) -> LogicalMutation {
         ordering("source_position", ordering_value),
         checkpoint(format!("cp-{ordering_value}")),
         1,
-        fixed_time(1),
+        support::fixed_time(1),
         BTreeMap::new(),
     )
     .build()
     .expect("valid delete")
-}
-
-fn sample_source_file_uri(name: &str) -> String {
-    let root = std::env::temp_dir().join("greytl-sink-source");
-    std::fs::create_dir_all(&root).expect("create source fixture dir");
-    let path = root.join(format!("{name}.parquet"));
-    std::fs::write(&path, b"parquet-fixture").expect("write source fixture file");
-    format!("file://{}", path.display())
-}
-
-fn fixed_time(secs: u64) -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::from_timestamp(secs as i64, 0).expect("valid timestamp")
 }
 
 fn block_on<F>(future: F) -> F::Output

@@ -111,17 +111,13 @@ fn sample_append_commit_request() -> CommitRequest {
                 content_hash: "hash-a".to_string(),
                 file_size_bytes: 128,
                 record_count: 3,
-                created_at: fixed_time(1),
+                created_at: support::fixed_time(1),
             }],
             content_hash: "content-a".to_string(),
-            created_at: fixed_time(2),
+            created_at: support::fixed_time(2),
         },
         idempotency_key: "batch-append-0001:append".into(),
     }
-}
-
-fn fixed_time(secs: u64) -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::from_timestamp(secs as i64, 0).expect("valid timestamp")
 }
 
 fn block_on<F>(future: F) -> F::Output

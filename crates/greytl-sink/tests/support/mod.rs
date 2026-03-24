@@ -29,6 +29,20 @@ pub fn with_destination(
     request
 }
 
+#[allow(dead_code)]
+pub fn fixed_time(secs: u64) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp(secs as i64, 0).expect("valid timestamp")
+}
+
+#[allow(dead_code)]
+pub fn sample_source_file_uri(name: &str) -> String {
+    let root = std::env::temp_dir().join("greytl-sink-source");
+    std::fs::create_dir_all(&root).expect("create source fixture dir");
+    let path = root.join(format!("{name}.parquet"));
+    std::fs::write(&path, b"parquet-fixture").expect("write source fixture file");
+    format!("file://{}", path.display())
+}
+
 unsafe fn dummy_raw_waker() -> RawWaker {
     RawWaker::new(std::ptr::null(), &DUMMY_WAKER_VTABLE)
 }

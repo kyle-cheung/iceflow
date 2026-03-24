@@ -85,13 +85,8 @@ impl Sink for TestDoubleSink {
 
         match inner.failpoint.take() {
             Some(SinkFailpoint::LoseAckOnce) => {
-                inner.commits.insert(key, meta);
-                inner
-                    .replay_identities
-                    .insert(scoped_commit_key(
-                        &prepared.request.destination_uri,
-                        &prepared.request.idempotency_key,
-                    ), replay_identity);
+                inner.commits.insert(key.clone(), meta);
+                inner.replay_identities.insert(key, replay_identity);
                 Err(Error::msg("commit ack lost"))
             }
             Some(SinkFailpoint::FailCommitOnce) => Err(Error::msg("commit failed")),

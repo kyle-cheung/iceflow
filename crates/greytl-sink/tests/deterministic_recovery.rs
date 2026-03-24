@@ -133,7 +133,7 @@ fn with_attempt(mut request: CommitRequest, idempotency_key: &str) -> CommitRequ
 }
 
 fn sample_append_commit_request() -> CommitRequest {
-    let source_file_uri = sample_source_file_uri("batch-append-0001-recovery");
+    let source_file_uri = support::sample_source_file_uri("batch-append-0001-recovery");
     CommitRequest {
         batch_id: BatchId::from("batch-append-0001"),
         destination_uri: "file:///tmp/warehouse/orders_events".to_string(),
@@ -158,10 +158,10 @@ fn sample_append_commit_request() -> CommitRequest {
                 content_hash: "hash-a".to_string(),
                 file_size_bytes: 128,
                 record_count: 3,
-                created_at: fixed_time(1),
+                created_at: support::fixed_time(1),
             }],
             content_hash: "content-a".to_string(),
-            created_at: fixed_time(2),
+            created_at: support::fixed_time(2),
         },
         idempotency_key: "batch-append-0001:append".into(),
     }
@@ -186,22 +186,10 @@ fn manifest_batch_files(
         .collect()
 }
 
-fn fixed_time(secs: u64) -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::from_timestamp(secs as i64, 0).expect("valid timestamp")
-}
-
 fn warehouse_root(name: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join("greytl-sink-tests").join(name);
     let _ = std::fs::remove_dir_all(&root);
     root
-}
-
-fn sample_source_file_uri(name: &str) -> String {
-    let root = std::env::temp_dir().join("greytl-sink-source");
-    std::fs::create_dir_all(&root).expect("create source fixture dir");
-    let path = root.join(format!("{name}.parquet"));
-    std::fs::write(&path, b"parquet-fixture").expect("write source fixture file");
-    format!("file://{}", path.display())
 }
 
 fn block_on<F>(future: F) -> F::Output

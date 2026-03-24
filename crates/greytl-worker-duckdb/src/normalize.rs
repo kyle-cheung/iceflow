@@ -1,6 +1,8 @@
 use anyhow::{Error, Result};
 use greytl_source::SourceBatch;
-use greytl_types::{CheckpointId, LogicalMutation, SourceClass, TableId, TableMode};
+use greytl_types::{
+    structured_key_identity, CheckpointId, LogicalMutation, SourceClass, TableId, TableMode,
+};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,7 +120,7 @@ pub fn normalize_batch(batch: SourceBatch) -> Result<NormalizedBatch> {
     if first.table_mode == TableMode::KeyedUpsert {
         let mut last_ordering_by_key: BTreeMap<String, i64> = BTreeMap::new();
         for record in &records {
-            let key = key_identity(record);
+            let key = structured_key_identity(&record.key);
             if let Some(previous) = last_ordering_by_key.get(&key) {
                 if record.ordering_value < *previous {
                     anyhow::bail!("ordering violation quarantine");
@@ -151,7 +153,7 @@ fn reduce_to_latest_by_key(
     let mut latest_by_key: BTreeMap<String, LogicalMutation> = BTreeMap::new();
 
     for record in records {
-        let key = key_identity(record);
+        let key = structured_key_identity(&record.key);
         match latest_by_key.get(&key) {
             Some(existing) if existing.ordering_value > record.ordering_value => {}
             _ => {
@@ -162,21 +164,6 @@ fn reduce_to_latest_by_key(
 
     Ok(latest_by_key)
 }
-
-pub(crate) fn key_identity(record: &LogicalMutation) -> String {
-    if record.key.parts.is_empty() {
-        return String::new();
-    }
-
-    record
-        .key
-        .parts
-        .iter()
-        .map(|part| format!("{}={:?}", part.name, part.value))
-        .collect::<Vec<_>>()
-        .join("|")
-}
-
 #[cfg(test)]
 mod tests {
     use greytl_source::SourceBatch;

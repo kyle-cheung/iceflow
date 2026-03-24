@@ -1,7 +1,7 @@
 use greytl_types::{
-    checkpoint, evaluate_schema_policy, key, ordering, table_id, validate_mutation, DataType,
-    KeyPart, LogicalMutation, Operation, Schema, SchemaColumn, SchemaDecision, SourceClass,
-    StructuredKey, TableMode,
+    checkpoint, evaluate_schema_policy, key, ordering, structured_key_identity, table_id,
+    validate_mutation, DataType, KeyPart, LogicalMutation, Operation, Schema, SchemaColumn,
+    SchemaDecision, SourceClass, StructuredKey, TableMode,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -109,6 +109,16 @@ fn structured_key_preserves_caller_order() {
         .collect();
 
     assert_eq!(names, vec!["tenant_id", "customer_id"]);
+}
+
+#[test]
+fn structured_key_identity_is_stable_for_composite_keys() {
+    let structured = key([("tenant_id", "t1"), ("customer_id", "c1")]);
+
+    assert_eq!(
+        structured_key_identity(&structured),
+        "tenant_id=String(\"t1\")|customer_id=String(\"c1\")"
+    );
 }
 
 #[test]

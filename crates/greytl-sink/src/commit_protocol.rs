@@ -1,6 +1,9 @@
 use anyhow::Result;
 use greytl_state::SnapshotRef;
-use greytl_types::{BatchId, BatchManifest, LogicalMutation, Operation, StructuredKey, TableMode};
+use greytl_types::{
+    structured_key_identity, BatchId, BatchManifest, LogicalMutation, Operation, StructuredKey,
+    TableMode,
+};
 use std::collections::BTreeSet;
 use std::fmt::{self, Display, Formatter};
 
@@ -180,8 +183,7 @@ pub fn plan_keyed_upsert_commit(records: &[LogicalMutation]) -> Result<KeyedUpse
     }
     let mut seen_keys = BTreeSet::new();
     for record in records {
-        let key_identity = structured_key_identity(&record.key);
-        if !seen_keys.insert(key_identity) {
+        if !seen_keys.insert(structured_key_identity(&record.key)) {
             anyhow::bail!("keyed_upsert plan requires normalized latest-per-key records");
         }
     }
@@ -252,16 +254,4 @@ pub(crate) fn stable_hash(parts: impl IntoIterator<Item = String>) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
-}
-
-fn structured_key_identity(key: &StructuredKey) -> String {
-    if key.parts.is_empty() {
-        return String::new();
-    }
-
-    key.parts
-        .iter()
-        .map(|part| format!("{}={:?}", part.name, part.value))
-        .collect::<Vec<_>>()
-        .join("|")
 }
