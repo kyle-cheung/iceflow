@@ -250,6 +250,14 @@ version = "0.1.0"
 [[package]]
 name = "greytl-sink"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "greytl-source",
+ "greytl-state",
+ "greytl-types",
+ "greytl-worker-duckdb",
+]
 
 [[package]]
 name = "greytl-source"
