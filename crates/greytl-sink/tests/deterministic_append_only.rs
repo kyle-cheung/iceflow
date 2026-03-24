@@ -73,7 +73,7 @@ fn filesystem_sink_persists_append_commit_across_reloads() -> Result<()> {
     block_on(async {
         let root = warehouse_root("filesystem-persist");
         let sink = FilesystemSink::new(root.clone());
-        let request = with_destination(
+        let request = support::with_destination(
             sample_append_commit_request(),
             root.join("warehouse/orders_events"),
         );
@@ -191,7 +191,7 @@ fn filesystem_sink_duplicate_replay_reuses_snapshot_identity() -> Result<()> {
     block_on(async {
         let root = warehouse_root("filesystem-duplicate-replay");
         let sink = FilesystemSink::new(root.clone());
-        let request = with_destination(
+        let request = support::with_destination(
             sample_append_commit_request(),
             root.join("warehouse/orders_events"),
         );
@@ -215,7 +215,8 @@ fn filesystem_sink_replaces_partial_staged_files_before_persisting_commit() -> R
         let root = warehouse_root("filesystem-partial-stage");
         let sink = FilesystemSink::new(root.clone());
         let destination_path = root.join("warehouse/orders_events");
-        let request = with_destination(sample_append_commit_request(), destination_path.clone());
+        let request =
+            support::with_destination(sample_append_commit_request(), destination_path.clone());
 
         let prepared = sink.prepare_commit(request.clone()).await?;
         let staged_path = destination_path
@@ -253,11 +254,6 @@ fn sample_state_commit_request() -> StateCommitRequest {
 
 fn with_attempt(mut request: CommitRequest, idempotency_key: &str) -> CommitRequest {
     request.idempotency_key = idempotency_key.to_string().into();
-    request
-}
-
-fn with_destination(mut request: CommitRequest, destination_path: std::path::PathBuf) -> CommitRequest {
-    request.destination_uri = format!("file://{}", destination_path.display());
     request
 }
 

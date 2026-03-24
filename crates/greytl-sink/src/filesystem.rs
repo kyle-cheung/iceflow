@@ -76,18 +76,7 @@ impl FilesystemSink {
                     temp_path.display()
                 ))
             })?;
-            if staged_path.exists() {
-                fs::remove_file(&staged_path).map_err(|err| {
-                    Error::msg(format!("remove {} failed: {err}", staged_path.display()))
-                })?;
-            }
-            fs::rename(&temp_path, &staged_path).map_err(|err| {
-                Error::msg(format!(
-                    "rename {} -> {} failed: {err}",
-                    temp_path.display(),
-                    staged_path.display()
-                ))
-            })?;
+            replace_staged_file(&temp_path, &staged_path)?;
 
             staged_files.push(file_uri(&staged_path));
         }
@@ -288,4 +277,31 @@ fn file_uri_path(uri: &str) -> Result<PathBuf> {
 
 fn file_uri(path: &Path) -> String {
     format!("file://{}", path.display())
+}
+
+#[cfg(not(windows))]
+fn replace_staged_file(temp_path: &Path, staged_path: &Path) -> Result<()> {
+    fs::rename(temp_path, staged_path).map_err(|err| {
+        Error::msg(format!(
+            "rename {} -> {} failed: {err}",
+            temp_path.display(),
+            staged_path.display()
+        ))
+    })
+}
+
+#[cfg(windows)]
+fn replace_staged_file(temp_path: &Path, staged_path: &Path) -> Result<()> {
+    if staged_path.exists() {
+        fs::remove_file(staged_path).map_err(|err| {
+            Error::msg(format!("remove {} failed: {err}", staged_path.display()))
+        })?;
+    }
+    fs::rename(temp_path, staged_path).map_err(|err| {
+        Error::msg(format!(
+            "rename {} -> {} failed: {err}",
+            temp_path.display(),
+            staged_path.display()
+        ))
+    })
 }

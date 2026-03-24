@@ -60,7 +60,7 @@ fn filesystem_sink_can_resolve_uncertain_commit_after_restart() -> Result<()> {
     block_on(async {
         let root = warehouse_root("filesystem-recovery");
         let sink = FilesystemSink::new(root.clone());
-        let request = with_destination(
+        let request = support::with_destination(
             sample_append_commit_request(),
             root.join("warehouse/orders_events"),
         );
@@ -129,11 +129,6 @@ fn ambiguous_resolution_yields_orphan_candidates_until_cleanup_is_recorded() -> 
 
 fn with_attempt(mut request: CommitRequest, idempotency_key: &str) -> CommitRequest {
     request.idempotency_key = idempotency_key.to_string().into();
-    request
-}
-
-fn with_destination(mut request: CommitRequest, destination_path: std::path::PathBuf) -> CommitRequest {
-    request.destination_uri = format!("file://{}", destination_path.display());
     request
 }
 

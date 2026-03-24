@@ -2,6 +2,8 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
+use greytl_sink::CommitRequest;
+
 pub fn block_on<F>(future: F) -> F::Output
 where
     F: Future,
@@ -16,6 +18,15 @@ where
             Poll::Pending => std::thread::yield_now(),
         }
     }
+}
+
+#[allow(dead_code)]
+pub fn with_destination(
+    mut request: CommitRequest,
+    destination_path: std::path::PathBuf,
+) -> CommitRequest {
+    request.destination_uri = format!("file://{}", destination_path.display());
+    request
 }
 
 unsafe fn dummy_raw_waker() -> RawWaker {
