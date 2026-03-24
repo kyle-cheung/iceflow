@@ -73,7 +73,10 @@ fn filesystem_sink_persists_append_commit_across_reloads() -> Result<()> {
     block_on(async {
         let root = warehouse_root("filesystem-persist");
         let sink = FilesystemSink::new(root.clone());
-        let request = sample_append_commit_request();
+        let request = with_destination(
+            sample_append_commit_request(),
+            root.join("warehouse/orders_events"),
+        );
 
         let prepared = sink.prepare_commit(request.clone()).await?;
         let committed = sink.commit(prepared).await?;
@@ -188,7 +191,10 @@ fn filesystem_sink_duplicate_replay_reuses_snapshot_identity() -> Result<()> {
     block_on(async {
         let root = warehouse_root("filesystem-duplicate-replay");
         let sink = FilesystemSink::new(root.clone());
-        let request = sample_append_commit_request();
+        let request = with_destination(
+            sample_append_commit_request(),
+            root.join("warehouse/orders_events"),
+        );
 
         let first = sink.prepare_commit(request.clone()).await?;
         let first = sink.commit(first).await?;
@@ -199,6 +205,38 @@ fn filesystem_sink_duplicate_replay_reuses_snapshot_identity() -> Result<()> {
 
         assert_eq!(first.snapshot_id, second.snapshot_id);
         assert_eq!(first.snapshot, second.snapshot);
+        Ok(())
+    })
+}
+
+#[test]
+fn filesystem_sink_replaces_partial_staged_files_before_persisting_commit() -> Result<()> {
+    block_on(async {
+        let root = warehouse_root("filesystem-partial-stage");
+        let sink = FilesystemSink::new(root.clone());
+        let destination_path = root.join("warehouse/orders_events");
+        let request = with_destination(sample_append_commit_request(), destination_path.clone());
+
+        let prepared = sink.prepare_commit(request.clone()).await?;
+        let staged_path = destination_path
+            .join("data")
+            .join(format!("{}-0000.parquet", prepared.snapshot_id));
+        std::fs::create_dir_all(
+            staged_path
+                .parent()
+                .expect("staged parquet parent directory"),
+        )
+        .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        std::fs::write(&staged_path, b"bad-copy")
+            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+
+        sink.commit(prepared).await?;
+
+        let source_bytes = std::fs::read(file_uri_path(&request.manifest.file_set[0].file_uri))
+            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        let staged_bytes =
+            std::fs::read(&staged_path).map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        assert_eq!(staged_bytes, source_bytes);
         Ok(())
     })
 }
@@ -215,6 +253,11 @@ fn sample_state_commit_request() -> StateCommitRequest {
 
 fn with_attempt(mut request: CommitRequest, idempotency_key: &str) -> CommitRequest {
     request.idempotency_key = idempotency_key.to_string().into();
+    request
+}
+
+fn with_destination(mut request: CommitRequest, destination_path: std::path::PathBuf) -> CommitRequest {
+    request.destination_uri = format!("file://{}", destination_path.display());
     request
 }
 

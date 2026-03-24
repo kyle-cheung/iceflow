@@ -62,16 +62,32 @@ impl FilesystemSink {
                 .unwrap_or("bin");
             let staged_path =
                 data_dir.join(format!("{}-{index:04}.{extension}", prepared.snapshot_id));
+            let temp_path = data_dir.join(format!("{}-{index:04}.{extension}.tmp", prepared.snapshot_id));
 
-            if !staged_path.exists() {
-                fs::copy(&source_path, &staged_path).map_err(|err| {
-                    Error::msg(format!(
-                        "copy {} -> {} failed: {err}",
-                        source_path.display(),
-                        staged_path.display()
-                    ))
+            if temp_path.exists() {
+                fs::remove_file(&temp_path).map_err(|err| {
+                    Error::msg(format!("remove {} failed: {err}", temp_path.display()))
                 })?;
             }
+            fs::copy(&source_path, &temp_path).map_err(|err| {
+                Error::msg(format!(
+                    "copy {} -> {} failed: {err}",
+                    source_path.display(),
+                    temp_path.display()
+                ))
+            })?;
+            if staged_path.exists() {
+                fs::remove_file(&staged_path).map_err(|err| {
+                    Error::msg(format!("remove {} failed: {err}", staged_path.display()))
+                })?;
+            }
+            fs::rename(&temp_path, &staged_path).map_err(|err| {
+                Error::msg(format!(
+                    "rename {} -> {} failed: {err}",
+                    temp_path.display(),
+                    staged_path.display()
+                ))
+            })?;
 
             staged_files.push(file_uri(&staged_path));
         }
