@@ -1,6 +1,7 @@
 use anyhow::Result;
 use greytl_state::SnapshotRef;
-use greytl_types::{BatchId, BatchManifest, TableMode};
+use greytl_types::{BatchId, BatchManifest, LogicalMutation, Operation, StructuredKey, TableMode};
+use std::collections::BTreeSet;
 use std::fmt::{self, Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +56,12 @@ pub struct PreparedCommit {
     pub snapshot: SnapshotRef,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyedUpsertPlan {
+    pub equality_delete_keys: Vec<StructuredKey>,
+    pub append_rows: Vec<LogicalMutation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitOutcome {
     pub snapshot_id: String,
@@ -105,12 +112,32 @@ pub trait Sink {
     async fn resolve_uncertain_commit(&self, attempt: &CommitLocator) -> Result<ResolvedOutcome>;
 }
 
-pub fn prepare_append_only_commit(mut req: CommitRequest) -> Result<PreparedCommit> {
+pub fn prepare_append_only_commit(req: CommitRequest) -> Result<PreparedCommit> {
+    prepare_commit_for_mode(
+        req,
+        TableMode::AppendOnly,
+        "sink v0 only supports append_only commits",
+    )
+}
+
+pub fn prepare_keyed_upsert_commit(req: CommitRequest) -> Result<PreparedCommit> {
+    prepare_commit_for_mode(
+        req,
+        TableMode::KeyedUpsert,
+        "sink v0 only supports keyed_upsert commits",
+    )
+}
+
+fn prepare_commit_for_mode(
+    mut req: CommitRequest,
+    expected_mode: TableMode,
+    mode_error: &str,
+) -> Result<PreparedCommit> {
     if req.batch_id != req.manifest.batch_id {
         anyhow::bail!("commit request batch_id must match manifest batch_id");
     }
-    if req.manifest.table_mode != TableMode::AppendOnly {
-        anyhow::bail!("sink v0 only supports append_only commits");
+    if req.manifest.table_mode != expected_mode {
+        anyhow::bail!("{}", mode_error);
     }
     if req.destination_uri.trim().is_empty() {
         anyhow::bail!("destination_uri is required");
@@ -138,6 +165,34 @@ pub fn prepare_append_only_commit(mut req: CommitRequest) -> Result<PreparedComm
         request: req,
         snapshot_id,
         snapshot,
+    })
+}
+
+pub fn plan_keyed_upsert_commit(records: &[LogicalMutation]) -> Result<KeyedUpsertPlan> {
+    if records.is_empty() {
+        anyhow::bail!("keyed_upsert plan requires at least one record");
+    }
+    if records
+        .iter()
+        .any(|record| record.table_mode != TableMode::KeyedUpsert)
+    {
+        anyhow::bail!("keyed_upsert plan requires keyed_upsert records");
+    }
+    let mut seen_keys = BTreeSet::new();
+    for record in records {
+        let key_identity = structured_key_identity(&record.key);
+        if !seen_keys.insert(key_identity) {
+            anyhow::bail!("keyed_upsert plan requires normalized latest-per-key records");
+        }
+    }
+
+    Ok(KeyedUpsertPlan {
+        equality_delete_keys: records.iter().map(|row| row.key.clone()).collect(),
+        append_rows: records
+            .iter()
+            .filter(|row| row.op != Operation::Delete)
+            .cloned()
+            .collect(),
     })
 }
 
@@ -197,4 +252,16 @@ pub(crate) fn stable_hash(parts: impl IntoIterator<Item = String>) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
+}
+
+fn structured_key_identity(key: &StructuredKey) -> String {
+    if key.parts.is_empty() {
+        return String::new();
+    }
+
+    key.parts
+        .iter()
+        .map(|part| format!("{}={:?}", part.name, part.value))
+        .collect::<Vec<_>>()
+        .join("|")
 }

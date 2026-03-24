@@ -257,6 +257,7 @@ dependencies = [
  "greytl-state",
  "greytl-types",
  "greytl-worker-duckdb",
+ "serde_json 0.1.0",
 ]
 
 [[package]]

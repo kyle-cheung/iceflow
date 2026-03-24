@@ -1,7 +1,7 @@
 use crate::commit_protocol::{
-    commit_outcome, prepare_append_only_commit, scoped_commit_key, snapshot_meta, CommitLocator,
-    CommitOutcome, CommitRequest, IdempotencyKey, LookupResult, PreparedCommit, ResolvedOutcome,
-    Sink, SnapshotMeta,
+    commit_outcome, prepare_append_only_commit, prepare_keyed_upsert_commit, scoped_commit_key,
+    snapshot_meta, CommitLocator, CommitOutcome, CommitRequest, IdempotencyKey, LookupResult,
+    PreparedCommit, ResolvedOutcome, Sink, SnapshotMeta,
 };
 use anyhow::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,6 +22,7 @@ pub struct TestDoubleSink {
 #[derive(Debug, Default)]
 struct TestDoubleState {
     commits: BTreeMap<String, SnapshotMeta>,
+    replay_identities: BTreeMap<String, String>,
     failpoint: Option<SinkFailpoint>,
     ambiguous: BTreeSet<String>,
 }
@@ -54,7 +55,10 @@ impl Default for TestDoubleSink {
 #[allow(async_fn_in_trait)]
 impl Sink for TestDoubleSink {
     async fn prepare_commit(&self, req: CommitRequest) -> Result<PreparedCommit> {
-        prepare_append_only_commit(req)
+        match req.manifest.table_mode {
+            greytl_types::TableMode::AppendOnly => prepare_append_only_commit(req),
+            greytl_types::TableMode::KeyedUpsert => prepare_keyed_upsert_commit(req),
+        }
     }
 
     async fn commit(&self, prepared: PreparedCommit) -> Result<CommitOutcome> {
@@ -64,9 +68,13 @@ impl Sink for TestDoubleSink {
         );
         let outcome = commit_outcome(&prepared);
         let meta = snapshot_meta(&prepared);
+        let replay_identity = prepared.request.manifest.replay_identity();
 
         let mut inner = self.inner.lock().expect("test double state lock");
         if let Some(existing) = inner.commits.get(&key) {
+            if inner.replay_identities.get(&key) != Some(&replay_identity) {
+                anyhow::bail!("idempotency key reused with different manifest");
+            }
             return Ok(CommitOutcome {
                 snapshot_id: existing.snapshot_id.clone(),
                 snapshot: existing.snapshot.clone(),
@@ -78,6 +86,12 @@ impl Sink for TestDoubleSink {
         match inner.failpoint.take() {
             Some(SinkFailpoint::LoseAckOnce) => {
                 inner.commits.insert(key, meta);
+                inner
+                    .replay_identities
+                    .insert(scoped_commit_key(
+                        &prepared.request.destination_uri,
+                        &prepared.request.idempotency_key,
+                    ), replay_identity);
                 Err(Error::msg("commit ack lost"))
             }
             Some(SinkFailpoint::FailCommitOnce) => Err(Error::msg("commit failed")),
@@ -86,7 +100,8 @@ impl Sink for TestDoubleSink {
                 Err(Error::msg("commit outcome ambiguous"))
             }
             None => {
-                inner.commits.insert(key, meta);
+                inner.commits.insert(key.clone(), meta);
+                inner.replay_identities.insert(key, replay_identity);
                 Ok(outcome)
             }
         }

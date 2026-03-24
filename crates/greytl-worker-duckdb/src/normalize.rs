@@ -116,17 +116,17 @@ pub fn normalize_batch(batch: SourceBatch) -> Result<NormalizedBatch> {
     }
 
     if first.table_mode == TableMode::KeyedUpsert {
-        let mut latest_by_key: BTreeMap<String, LogicalMutation> = BTreeMap::new();
-        for record in records {
-            let key = key_identity(&record);
-            match latest_by_key.get(&key) {
-                Some(existing) if existing.ordering_value > record.ordering_value => {}
-                _ => {
-                    latest_by_key.insert(key, record);
+        let mut last_ordering_by_key: BTreeMap<String, i64> = BTreeMap::new();
+        for record in &records {
+            let key = key_identity(record);
+            if let Some(previous) = last_ordering_by_key.get(&key) {
+                if record.ordering_value < *previous {
+                    anyhow::bail!("ordering violation quarantine");
                 }
             }
+            last_ordering_by_key.insert(key, record.ordering_value);
         }
-        records = latest_by_key.into_values().collect();
+        records = reduce_to_latest_by_key(&records)?.into_values().collect();
     }
 
     Ok(NormalizedBatch {
@@ -143,6 +143,24 @@ pub fn normalize_batch(batch: SourceBatch) -> Result<NormalizedBatch> {
         schema_version: first.schema_version,
         records,
     })
+}
+
+fn reduce_to_latest_by_key(
+    records: &[LogicalMutation],
+) -> Result<BTreeMap<String, LogicalMutation>> {
+    let mut latest_by_key: BTreeMap<String, LogicalMutation> = BTreeMap::new();
+
+    for record in records {
+        let key = key_identity(record);
+        match latest_by_key.get(&key) {
+            Some(existing) if existing.ordering_value > record.ordering_value => {}
+            _ => {
+                latest_by_key.insert(key, record.clone());
+            }
+        }
+    }
+
+    Ok(latest_by_key)
 }
 
 pub(crate) fn key_identity(record: &LogicalMutation) -> String {
@@ -174,7 +192,8 @@ mod tests {
     #[test]
     fn keyed_upsert_normalize_keeps_latest_mutation_per_key() {
         let worker = DuckDbWorker::in_memory().expect("worker");
-        let normalized = run_ready(worker.normalize(sample_keyed_batch())).expect("normalized batch");
+        let normalized =
+            run_ready(worker.normalize(sample_keyed_batch())).expect("normalized batch");
 
         assert_eq!(normalized.record_count(), 2);
 
@@ -191,9 +210,23 @@ mod tests {
     }
 
     #[test]
+    fn keyed_upsert_normalize_allows_interleaved_keys_when_each_key_is_ordered() {
+        let worker = DuckDbWorker::in_memory().expect("worker");
+        let normalized = run_ready(worker.normalize(sample_interleaved_key_batch()))
+            .expect("per-key ordered batch should normalize");
+
+        assert_eq!(normalized.record_count(), 2);
+        assert_eq!(normalized.records()[0].key, key([("customer_id", 1)]));
+        assert_eq!(normalized.records()[0].ordering_value, 15);
+        assert_eq!(normalized.records()[1].key, key([("customer_id", 2)]));
+        assert_eq!(normalized.records()[1].ordering_value, 20);
+    }
+
+    #[test]
     fn normalize_rejects_batches_with_mixed_ordering_fields() {
         let worker = DuckDbWorker::in_memory().expect("worker");
-        let err = run_ready(worker.normalize(sample_mixed_ordering_batch())).expect_err("invalid ordering");
+        let err = run_ready(worker.normalize(sample_mixed_ordering_batch()))
+            .expect_err("invalid ordering");
 
         assert!(err.to_string().contains("ordering_field"));
     }
@@ -201,7 +234,8 @@ mod tests {
     #[test]
     fn append_only_normalize_preserves_records_and_bounds() {
         let worker = DuckDbWorker::in_memory().expect("worker");
-        let normalized = run_ready(worker.normalize(sample_append_only_batch())).expect("normalized batch");
+        let normalized =
+            run_ready(worker.normalize(sample_append_only_batch())).expect("normalized batch");
 
         assert_eq!(normalized.record_count(), 3);
         assert_eq!(normalized.ordering_min(), 11);
@@ -235,6 +269,17 @@ mod tests {
         }
     }
 
+    fn sample_interleaved_key_batch() -> SourceBatch {
+        SourceBatch {
+            batch_file: "fixtures/customer_state/batch-0003.jsonl".to_string(),
+            records: vec![
+                keyed_upsert(1, 10, Some(json!({ "customer_id": 1, "status": "trial" }))),
+                keyed_upsert(2, 20, Some(json!({ "customer_id": 2, "status": "active" }))),
+                keyed_upsert(1, 15, Some(json!({ "customer_id": 1, "status": "active" }))),
+            ],
+        }
+    }
+
     fn sample_append_only_batch() -> SourceBatch {
         SourceBatch {
             batch_file: "fixtures/orders/batch-0001.jsonl".to_string(),
@@ -246,7 +291,11 @@ mod tests {
         }
     }
 
-    fn keyed_upsert(customer_id: i64, ordering_value: i64, after: Option<serde_json::Value>) -> LogicalMutation {
+    fn keyed_upsert(
+        customer_id: i64,
+        ordering_value: i64,
+        after: Option<serde_json::Value>,
+    ) -> LogicalMutation {
         let builder = LogicalMutation::upsert(
             table_id("customer_state"),
             "source-a",

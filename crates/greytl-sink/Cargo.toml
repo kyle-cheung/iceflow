@@ -12,3 +12,4 @@ greytl-types = { path = "../greytl-types" }
 chrono = { path = "../chrono" }
 greytl-source = { path = "../greytl-source" }
 greytl-worker-duckdb = { path = "../greytl-worker-duckdb" }
+serde_json = { path = "../serde_json" }
