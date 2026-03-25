@@ -4,6 +4,8 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use greytl_sink::CommitRequest;
 
+pub mod polaris_mock;
+
 pub fn block_on<F>(future: F) -> F::Output
 where
     F: Future,

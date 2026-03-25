@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - kcheung/**
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show cargo version
+        run: cargo --version
+      - name: Run workspace tests
+        run: cargo test --workspace
+      - name: Run workspace check
+        run: cargo check --workspace
+
+  real-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare local stack env
+        run: cp infra/local/.env.example infra/local/.env
+      - name: Validate compose config
+        run: docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml config >/dev/null
+      - name: Start local Polaris stack
+        run: docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml up -d --wait
+      - name: Run real-stack smoke tests
+        run: |
+          . infra/local/.env
+          POLARIS_CATALOG_URI="http://127.0.0.1:${POLARIS_API_PORT}/api/catalog" \
+          POLARIS_CATALOG_NAME="${POLARIS_CATALOG_NAME}" \
+          POLARIS_NAMESPACE="${POLARIS_NAMESPACE}" \
+          POLARIS_CLIENT_ID="${POLARIS_ROOT_CLIENT_ID}" \
+          POLARIS_CLIENT_SECRET="${POLARIS_ROOT_CLIENT_SECRET}" \
+          cargo test -p greytl-sink real_stack_ -- --ignored
+      - name: Stop local Polaris stack
+        if: always()
+        run: docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml down -v

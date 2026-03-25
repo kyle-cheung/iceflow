@@ -4,4 +4,10 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-
+anyhow = { path = "../anyhow" }
+greytl-runtime = { path = "../greytl-runtime" }
+greytl-sink = { path = "../greytl-sink" }
+greytl-source = { path = "../greytl-source" }
+greytl-state = { path = "../greytl-state" }
+greytl-types = { path = "../greytl-types" }
+greytl-worker-duckdb = { path = "../greytl-worker-duckdb" }
