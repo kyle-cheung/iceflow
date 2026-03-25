@@ -2,7 +2,8 @@ pub mod commands;
 
 use anyhow::{Error, Result};
 use std::future::Future;
-use std::pin::Pin;
+use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
@@ -97,24 +98,47 @@ pub(crate) fn block_on<F>(future: F) -> F::Output
 where
     F: Future,
 {
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    let waker = Waker::from(Arc::new(NoopWake));
+    let parker = Arc::new(ThreadWaker {
+        thread: std::thread::current(),
+        notified: AtomicBool::new(false),
+    });
+    let waker = Waker::from(Arc::clone(&parker));
+    let mut future = pin!(future);
     let mut context = Context::from_waker(&waker);
-    let mut future = Pin::from(Box::new(future));
 
-    match Future::poll(future.as_mut(), &mut context) {
-        Poll::Ready(output) => output,
-        Poll::Pending => panic!("future unexpectedly pending"),
+    loop {
+        parker.notified.store(false, Ordering::Release);
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => {
+                while !parker.notified.swap(false, Ordering::AcqRel) {
+                    std::thread::park();
+                }
+            }
+        }
+    }
+}
+
+struct ThreadWaker {
+    thread: std::thread::Thread,
+    notified: AtomicBool,
+}
+
+impl Wake for ThreadWaker {
+    fn wake(self: Arc<Self>) {
+        self.notified.store(true, Ordering::Release);
+        self.thread.unpark();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
     #[test]
     fn cli_exposes_run_and_compact_subcommands() {
         let cmd = crate::Cli::command();
@@ -124,5 +148,45 @@ mod tests {
         assert!(cmd
             .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "compact"));
+    }
+
+    #[test]
+    fn block_on_advances_futures_that_need_multiple_polls() {
+        struct ReadyOnWake {
+            started: bool,
+            woke: Arc<AtomicBool>,
+        }
+
+        impl Future for ReadyOnWake {
+            type Output = &'static str;
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                if self.woke.load(Ordering::Acquire) {
+                    return Poll::Ready("done");
+                }
+
+                if self.started {
+                    panic!("future was polled again before its waker fired");
+                }
+
+                self.started = true;
+                let woke = Arc::clone(&self.woke);
+                let waker = cx.waker().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    woke.store(true, Ordering::Release);
+                    waker.wake();
+                });
+                Poll::Pending
+            }
+        }
+
+        assert_eq!(
+            crate::block_on(ReadyOnWake {
+                started: false,
+                woke: Arc::new(AtomicBool::new(false)),
+            }),
+            "done"
+        );
     }
 }

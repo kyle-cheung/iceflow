@@ -12,10 +12,16 @@ struct NamespaceState {
     properties: Arc<Mutex<BTreeMap<String, String>>>,
 }
 
+#[derive(Clone, Default)]
+struct OAuthState {
+    last_body: Arc<Mutex<Option<String>>>,
+}
+
 pub struct MockPolarisServer {
     base_uri: String,
     warehouse: String,
     state: Arc<Mutex<BTreeMap<String, NamespaceState>>>,
+    oauth: OAuthState,
     _worker: thread::JoinHandle<()>,
 }
 
@@ -25,7 +31,9 @@ impl MockPolarisServer {
         let base_uri = format!("http://{}", listener.local_addr().expect("local addr"));
         let warehouse = warehouse.into();
         let state = Arc::new(Mutex::new(BTreeMap::new()));
+        let oauth = OAuthState::default();
         let state_for_thread = Arc::clone(&state);
+        let oauth_for_thread = oauth.clone();
         let warehouse_for_thread = warehouse.clone();
         let worker = thread::spawn(move || {
             for incoming in listener.incoming() {
@@ -34,7 +42,8 @@ impl MockPolarisServer {
                     Err(_) => continue,
                 };
                 let state = Arc::clone(&state_for_thread);
-                if handle_connection(&mut stream, &warehouse_for_thread, state).is_err() {
+                let oauth = oauth_for_thread.clone();
+                if handle_connection(&mut stream, &warehouse_for_thread, state, oauth).is_err() {
                     let _ = respond(&mut stream, 500, "{}");
                 }
             }
@@ -44,6 +53,7 @@ impl MockPolarisServer {
             base_uri,
             warehouse,
             state,
+            oauth,
             _worker: worker,
         }
     }
@@ -63,12 +73,17 @@ impl MockPolarisServer {
             .and_then(|state| state.get(namespace).cloned())
             .and_then(|entry| entry.properties.lock().ok().map(|props| props.clone()))
     }
+
+    pub fn last_oauth_body(&self) -> Option<String> {
+        self.oauth.last_body.lock().ok().and_then(|body| body.clone())
+    }
 }
 
 fn handle_connection(
     stream: &mut TcpStream,
     warehouse: &str,
     state: Arc<Mutex<BTreeMap<String, NamespaceState>>>,
+    oauth: OAuthState,
 ) -> Result<()> {
     let request = read_request(stream)?;
     let mut parts = request.split("\r\n\r\n");
@@ -87,6 +102,7 @@ fn handle_connection(
 
     match (method, path_only) {
         ("POST", "/api/catalog/v1/oauth/tokens") => {
+            *oauth.last_body.lock().expect("oauth body") = Some(body.to_string());
             respond(stream, 200, "{\"access_token\":\"mock-token\"}")?;
         }
         ("GET", "/api/catalog/v1/config") if path.contains(&format!("warehouse={warehouse}")) => {

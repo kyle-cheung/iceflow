@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[test]
 fn run_command_processes_reference_workload_to_filesystem_sink() -> Result<()> {
     let destination_root = temp_root("run-append-only");
-    let report = block_on(run::execute(Args {
+    let report = run::execute_blocking(Args {
         workload: "append_only.orders_events".to_string(),
         destination_uri: format!("file://{}", destination_root.display()),
         sink: SinkKind::Filesystem,
@@ -14,7 +14,7 @@ fn run_command_processes_reference_workload_to_filesystem_sink() -> Result<()> {
         catalog_name: None,
         namespace: None,
         batch_limit: None,
-    }))?;
+    })?;
 
     let data_dir = destination_root.join("data");
     let file_count = fs::read_dir(&data_dir)
@@ -33,29 +33,4 @@ fn temp_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join("greytl-cli-tests").join(name);
     let _ = fs::remove_dir_all(&root);
     root
-}
-
-fn block_on<F>(future: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
-
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Pin::from(Box::new(future));
-
-    match Future::poll(future.as_mut(), &mut context) {
-        Poll::Ready(output) => output,
-        Poll::Pending => panic!("future unexpectedly pending"),
-    }
 }

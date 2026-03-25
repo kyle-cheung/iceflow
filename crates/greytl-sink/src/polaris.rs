@@ -83,14 +83,12 @@ impl PolarisSink {
         let response = self
             .client
             .post(self.oauth_url())
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            )
-            .body(format!(
-                "grant_type=client_credentials&client_id={}&client_secret={}&scope=PRINCIPAL_ROLE:ALL",
-                credentials.client_id, credentials.client_secret
-            ))
+            .form(&[
+                ("grant_type", "client_credentials"),
+                ("client_id", credentials.client_id.as_str()),
+                ("client_secret", credentials.client_secret.as_str()),
+                ("scope", "PRINCIPAL_ROLE:ALL"),
+            ])
             .send()
             .map_err(http_error)?
             .error_for_status()

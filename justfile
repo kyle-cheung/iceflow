@@ -18,10 +18,4 @@ stack-down:
 
 test-real-stack:
     test -f infra/local/.env || cp infra/local/.env.example infra/local/.env
-    . infra/local/.env
-    POLARIS_CATALOG_URI="http://127.0.0.1:${POLARIS_API_PORT}/api/catalog" \
-    POLARIS_CATALOG_NAME="${POLARIS_CATALOG_NAME}" \
-    POLARIS_NAMESPACE="${POLARIS_NAMESPACE}" \
-    POLARIS_CLIENT_ID="${POLARIS_ROOT_CLIENT_ID}" \
-    POLARIS_CLIENT_SECRET="${POLARIS_ROOT_CLIENT_SECRET}" \
-    cargo test -p greytl-sink real_stack_ -- --ignored
+    . infra/local/.env && POLARIS_CATALOG_URI="http://127.0.0.1:${POLARIS_API_PORT}/api/catalog" POLARIS_CATALOG_NAME="${POLARIS_CATALOG_NAME}" POLARIS_NAMESPACE="${POLARIS_NAMESPACE}" POLARIS_CLIENT_ID="${POLARIS_ROOT_CLIENT_ID}" POLARIS_CLIENT_SECRET="${POLARIS_ROOT_CLIENT_SECRET}" cargo test -p greytl-sink real_stack_ -- --ignored

@@ -59,6 +59,40 @@ fn polaris_append_only_commit_is_recorded_in_namespace_properties() -> Result<()
 }
 
 #[test]
+fn polaris_oauth_client_credentials_are_form_encoded() -> Result<()> {
+    block_on(async {
+        let server = MockPolarisServer::start("quickstart_catalog");
+        let root = warehouse_root("polaris-oauth-encoding");
+        let sink = PolarisSink::new(
+            server.catalog_uri(),
+            server.warehouse(),
+            "orders_events",
+            format!("file://{}", root.join("warehouse/orders_events").display()),
+        )
+        .with_client_credentials("root&ops=admin+lead%west", "s3cr3t&rotate=yes+later%");
+
+        let request = sample_append_commit_request(&root);
+        let prepared = sink.prepare_commit(request).await?;
+        let _committed = sink.commit(prepared).await?;
+
+        let body = server.last_oauth_body().expect("oauth body should be captured");
+        let params = parse_form_body(&body);
+        assert_eq!(params.get("grant_type").map(String::as_str), Some("client_credentials"));
+        assert_eq!(
+            params.get("client_id").map(String::as_str),
+            Some("root&ops=admin+lead%west")
+        );
+        assert_eq!(
+            params.get("client_secret").map(String::as_str),
+            Some("s3cr3t&rotate=yes+later%")
+        );
+        assert_eq!(params.get("scope").map(String::as_str), Some("PRINCIPAL_ROLE:ALL"));
+        assert_eq!(params.len(), 4);
+        Ok(())
+    })
+}
+
+#[test]
 #[ignore = "requires infra/local Polaris stack"]
 fn real_stack_append_only_commit_round_trips_against_polaris() -> Result<()> {
     block_on(async {
@@ -128,6 +162,57 @@ fn warehouse_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join("greytl-sink-tests").join(name);
     let _ = std::fs::remove_dir_all(&root);
     root
+}
+
+fn parse_form_body(body: &str) -> BTreeMap<String, String> {
+    body.split('&')
+        .map(|entry| {
+            let (key, value) = entry
+                .split_once('=')
+                .unwrap_or_else(|| panic!("expected form key/value pair, got {entry}"));
+            (percent_decode(key), percent_decode(value))
+        })
+        .collect()
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                let hi = *bytes
+                    .get(index + 1)
+                    .unwrap_or_else(|| panic!("incomplete percent escape in {value}"));
+                let lo = *bytes
+                    .get(index + 2)
+                    .unwrap_or_else(|| panic!("incomplete percent escape in {value}"));
+                decoded.push((hex_value(hi) << 4) | hex_value(lo));
+                index += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+
+    String::from_utf8(decoded).expect("valid utf-8 in form body")
+}
+
+fn hex_value(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => panic!("invalid hex digit: {}", byte as char),
+    }
 }
 
 fn block_on<F>(future: F) -> F::Output
