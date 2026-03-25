@@ -246,6 +246,9 @@ version = "0.1.0"
 [[package]]
 name = "greytl-runtime"
 version = "0.1.0"
+dependencies = [
+ "greytl-types",
+]
 
 [[package]]
 name = "greytl-sink"

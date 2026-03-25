@@ -4,4 +4,4 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-
+greytl-types = { path = "../greytl-types" }
