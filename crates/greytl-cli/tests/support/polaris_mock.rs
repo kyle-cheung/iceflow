@@ -225,7 +225,7 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) -> Result<()> {
 }
 
 fn parse_updates(body: &str) -> Option<BTreeMap<String, String>> {
-    let value: serde_json_ext::Value = serde_json_ext::from_str(body).ok()?;
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
     let object = value.get("updates")?.as_object()?;
     let mut updates = BTreeMap::new();
     for (key, value) in object {

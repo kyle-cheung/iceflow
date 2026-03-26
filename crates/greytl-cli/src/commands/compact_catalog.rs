@@ -1,4 +1,5 @@
 use anyhow::{Error, Result};
+use reqwest::Url;
 use std::path::{Path, PathBuf};
 
 pub(super) trait CompactionCatalog {
@@ -28,18 +29,42 @@ impl PolarisCompactionCatalog {
         }
     }
 
-    fn config_url(&self) -> String {
-        format!(
-            "{}/v1/config?warehouse={}",
-            self.catalog_uri, self.catalog_name
-        )
+    fn base_url(&self) -> Result<Url> {
+        Url::parse(&self.catalog_uri).map_err(|err| Error::msg(err.to_string()))
     }
 
-    fn namespace_url(&self, prefix: &str) -> String {
-        format!(
-            "{}/v1/{prefix}/namespaces/{}",
-            self.catalog_uri, self.namespace
-        )
+    fn config_url(&self) -> Result<Url> {
+        let mut url = self.base_url()?;
+        {
+            let mut segments = url.path_segments_mut().map_err(|_| {
+                Error::msg(format!(
+                    "catalog URI is not a valid base: {}",
+                    self.catalog_uri
+                ))
+            })?;
+            segments.push("v1");
+            segments.push("config");
+        }
+        url.query_pairs_mut()
+            .append_pair("warehouse", &self.catalog_name);
+        Ok(url)
+    }
+
+    fn namespace_url(&self, prefix: &str) -> Result<Url> {
+        let mut url = self.base_url()?;
+        {
+            let mut segments = url.path_segments_mut().map_err(|_| {
+                Error::msg(format!(
+                    "catalog URI is not a valid base: {}",
+                    self.catalog_uri
+                ))
+            })?;
+            segments.push("v1");
+            segments.push(prefix);
+            segments.push("namespaces");
+            segments.push(&self.namespace);
+        }
+        Ok(url)
     }
 }
 
@@ -47,16 +72,16 @@ impl CompactionCatalog for PolarisCompactionCatalog {
     fn validate_target(&self) -> Result<()> {
         let config = self
             .client
-            .get(self.config_url())
+            .get(self.config_url()?)
             .send()
             .map_err(|err| Error::msg(err.to_string()))?
             .error_for_status()
             .map_err(|err| Error::msg(err.to_string()))?
-            .json::<serde_json_ext::Value>()
+            .json::<serde_json::Value>()
             .map_err(|err| Error::msg(err.to_string()))?;
 
         let prefix = match config {
-            serde_json_ext::Value::Object(object) => object
+            serde_json::Value::Object(object) => object
                 .get("defaults")
                 .and_then(|defaults| defaults.get("prefix"))
                 .and_then(|value| value.as_str())
@@ -72,7 +97,7 @@ impl CompactionCatalog for PolarisCompactionCatalog {
         };
 
         self.client
-            .get(self.namespace_url(&prefix))
+            .get(self.namespace_url(&prefix)?)
             .send()
             .map_err(|err| Error::msg(err.to_string()))?
             .error_for_status()
@@ -82,5 +107,33 @@ impl CompactionCatalog for PolarisCompactionCatalog {
 
     fn snapshot_dir(&self, table_root: &Path) -> PathBuf {
         table_root.join("_greytl_snapshots")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_catalog_urls_encode_user_supplied_segments() {
+        let catalog = PolarisCompactionCatalog::new(
+            "http://127.0.0.1:8181/api/catalog",
+            "qa warehouse/blue team",
+            "orders/events #1",
+        );
+
+        let config_url = catalog.config_url().expect("config url");
+        assert_eq!(
+            config_url.as_str(),
+            "http://127.0.0.1:8181/api/catalog/v1/config?warehouse=qa+warehouse%2Fblue+team"
+        );
+
+        let namespace_url = catalog
+            .namespace_url("prefix/with spaces?#")
+            .expect("namespace url");
+        assert_eq!(
+            namespace_url.as_str(),
+            "http://127.0.0.1:8181/api/catalog/v1/prefix%2Fwith%20spaces%3F%23/namespaces/orders%2Fevents%20%231"
+        );
     }
 }

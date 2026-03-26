@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::file_uri_path;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveFile {
     pub file_uri: String,
@@ -76,7 +78,7 @@ pub(crate) fn load_compaction_records(compaction_dir: &Path) -> Result<Vec<Compa
         let content = fs::read_to_string(&path)
             .map_err(|err| Error::msg(format!("{}: {err}", path.display())))?;
         records.push(
-            serde_json_ext::from_str(&content)
+            serde_json::from_str(&content)
                 .map_err(|err| Error::msg(format!("{}: {err}", path.display())))?,
         );
     }
@@ -150,8 +152,7 @@ pub(crate) fn write_compaction_record(
         "{:06}-{}.json",
         record.sequence, record.snapshot_id
     ));
-    let json =
-        serde_json_ext::to_string_pretty(record).map_err(|err| Error::msg(err.to_string()))?;
+    let json = serde_json::to_string_pretty(record).map_err(|err| Error::msg(err.to_string()))?;
     fs::write(&path, json).map_err(|err| Error::msg(format!("{}: {err}", path.display())))?;
     Ok(path)
 }
@@ -161,12 +162,6 @@ pub(crate) fn build_created_at_string() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO);
     format!("{}:{:09}", timestamp.as_secs(), timestamp.subsec_nanos())
-}
-
-fn file_uri_path(uri: &str) -> Result<PathBuf> {
-    uri.strip_prefix("file://")
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::msg(format!("expected file:// uri, got {uri}")))
 }
 
 #[cfg(test)]

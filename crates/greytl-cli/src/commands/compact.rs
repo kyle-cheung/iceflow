@@ -11,6 +11,7 @@ use super::compact_history::{
     next_compaction_sequence, rebuild_active_files, write_compaction_record, ActiveFile,
     CompactionRecord,
 };
+use super::file_uri_path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Args {
@@ -36,7 +37,7 @@ pub struct CompactReport {
 
 impl CompactReport {
     pub fn to_json(&self) -> String {
-        serde_json_ext::to_string(self).expect("compact report serialization should not fail")
+        serde_json::to_string(self).expect("compact report serialization should not fail")
     }
 }
 
@@ -127,10 +128,10 @@ impl Args {
 }
 
 pub fn execute_blocking(args: Args) -> Result<CompactReport> {
-    crate::block_on(execute(args))
+    execute(args)
 }
 
-pub async fn execute(args: Args) -> Result<CompactReport> {
+pub fn execute(args: Args) -> Result<CompactReport> {
     let started = Instant::now();
     if args.table_mode != TableMode::AppendOnly {
         anyhow::bail!("compaction of keyed_upsert tables is not supported in this version");
@@ -224,12 +225,6 @@ fn candidate_paths(candidates: &[ActiveFile]) -> Result<Vec<PathBuf>> {
         .iter()
         .map(|file| file_uri_path(&file.file_uri))
         .collect()
-}
-
-fn file_uri_path(uri: &str) -> Result<PathBuf> {
-    uri.strip_prefix("file://")
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::msg(format!("compact requires file:// uri, got {uri}")))
 }
 
 #[cfg(test)]
