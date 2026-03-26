@@ -23,7 +23,7 @@ services:
       start_period: 40s
 
   object-store-init:
-    image: amazon/aws-cli:2
+    image: public.ecr.aws/aws-cli/aws-cli:2.27.41
     depends_on:
       object-store:
         condition: service_healthy
