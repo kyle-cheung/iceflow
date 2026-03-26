@@ -562,7 +562,8 @@ Tier 2, real catalog and object-store integration tests:
 - local object store or filesystem-backed warehouse
 - local catalog target where possible
 - v0 reference stack is Polaris plus a local S3-compatible object store plus SQLite state store
-- the current `infra/local` default uses MinIO, but that provider choice is a replaceable local-stack detail rather than a normative architecture dependency
+- the current `infra/local` default uses RustFS, but that provider choice is a replaceable local-stack detail rather than a normative architecture dependency
+- Task 8b audited `crates/greytl-sink/src/polaris.rs` and `infra/local/polaris-bootstrap.sh` and found no presigned URL path in the current reference stack, so presigned URL verification is excluded from the RustFS gate
 - reuse the same fixtures and expected outcomes as Tier 1
 - required contract coverage:
   - sink and commit protocol behavior against the real catalog
@@ -607,7 +608,7 @@ Tier 3, local performance and soak tests:
 - state store backend: SQLite in WAL mode
 - Tier 0 and Tier 1 warehouse: local filesystem-backed Iceberg warehouse plus SQLite state store and deterministic sink test doubles
 - Tier 2 warehouse and catalog stack: Polaris plus a local S3-compatible object store plus SQLite state store
-- current local-stack default object-store provider: MinIO
+- current local-stack default object-store provider: RustFS
 - project reference CI runner class:
   - Linux x86_64
   - 8 vCPU
@@ -737,7 +738,7 @@ For v0, these inputs are fixed as follows.
 - reference local stack for gate measurement:
   - Polaris
   - local S3-compatible object store
-  - current default provider: MinIO
+  - current default provider: RustFS
   - SQLite state store
 
 `R_target_v0`:
