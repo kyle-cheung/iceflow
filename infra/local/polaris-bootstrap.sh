@@ -5,7 +5,8 @@ set -eu
 : "${POLARIS_ROOT_CLIENT_SECRET:?POLARIS_ROOT_CLIENT_SECRET is required}"
 : "${POLARIS_REALM:?POLARIS_REALM is required}"
 : "${POLARIS_CATALOG_NAME:?POLARIS_CATALOG_NAME is required}"
-: "${MINIO_BUCKET:?MINIO_BUCKET is required}"
+: "${OBJECT_STORE_BUCKET:?OBJECT_STORE_BUCKET is required}"
+: "${OBJECT_STORE_API_PORT:?OBJECT_STORE_API_PORT is required}"
 
 apk add --no-cache jq >/dev/null
 
@@ -26,13 +27,13 @@ PAYLOAD="$(cat <<EOF
     "type": "INTERNAL",
     "readOnly": false,
     "properties": {
-      "default-base-location": "s3://${MINIO_BUCKET}"
+      "default-base-location": "s3://${OBJECT_STORE_BUCKET}"
     },
     "storageConfigInfo": {
       "storageType": "S3",
-      "allowedLocations": ["s3://${MINIO_BUCKET}"],
-      "endpoint": "http://localhost:9000",
-      "endpointInternal": "http://minio:9000",
+      "allowedLocations": ["s3://${OBJECT_STORE_BUCKET}"],
+      "endpoint": "http://localhost:${OBJECT_STORE_API_PORT}",
+      "endpointInternal": "http://object-store:9000",
       "pathStyleAccess": true
     }
   }
