@@ -561,7 +561,8 @@ Tier 2, real catalog and object-store integration tests:
 - single-node local stack
 - local object store or filesystem-backed warehouse
 - local catalog target where possible
-- v0 reference stack is Polaris plus MinIO plus SQLite state store
+- v0 reference stack is Polaris plus a local S3-compatible object store plus SQLite state store
+- the current `infra/local` default uses MinIO, but that provider choice is a replaceable local-stack detail rather than a normative architecture dependency
 - reuse the same fixtures and expected outcomes as Tier 1
 - required contract coverage:
   - sink and commit protocol behavior against the real catalog
@@ -605,7 +606,8 @@ Tier 3, local performance and soak tests:
 
 - state store backend: SQLite in WAL mode
 - Tier 0 and Tier 1 warehouse: local filesystem-backed Iceberg warehouse plus SQLite state store and deterministic sink test doubles
-- Tier 2 warehouse and catalog stack: Polaris plus MinIO plus SQLite state store
+- Tier 2 warehouse and catalog stack: Polaris plus a local S3-compatible object store plus SQLite state store
+- current local-stack default object-store provider: MinIO
 - project reference CI runner class:
   - Linux x86_64
   - 8 vCPU
@@ -734,7 +736,8 @@ For v0, these inputs are fixed as follows.
 
 - reference local stack for gate measurement:
   - Polaris
-  - MinIO
+  - local S3-compatible object store
+  - current default provider: MinIO
   - SQLite state store
 
 `R_target_v0`:
@@ -764,7 +767,7 @@ Mapped hypothesis:
 
 Baseline comparison target:
 
-- a reference Python baseline path that commits the same landed-Parquet fixtures using PyIceberg against the same Polaris plus MinIO stack
+- a reference Python baseline path that commits the same landed-Parquet fixtures using PyIceberg against the same Polaris plus local S3-compatible object-store stack
 
 Pass:
 
@@ -846,7 +849,7 @@ In scope:
 - durable control plane and commit ledger
 - Parquet batch plus manifest replay boundary
 - deterministic local failure injection
-- local real-stack testing with the Polaris plus MinIO plus SQLite reference stack
+- local real-stack testing with the Polaris plus local S3-compatible object-store plus SQLite reference stack
 - reconciliation and orphan cleanup
 - offline compaction utility
 

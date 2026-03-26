@@ -80,7 +80,7 @@ just test-fast
 # Deterministic integration tests (Tier 1)
 just test-deterministic
 
-# Real-stack tests against Polaris + MinIO (Tier 2)
+# Real-stack tests against Polaris + a local S3-compatible object store (Tier 2)
 just test-real
 ```
 
@@ -97,9 +97,11 @@ cargo run -p greytl-cli -- compact --warehouse <path>
 ### Local Stack
 
 ```sh
-# Start Polaris + MinIO for real-stack testing
+# Start Polaris + the local S3-compatible object store for real-stack testing
 docker compose -f infra/local/docker-compose.yml up -d
 ```
+
+Current `infra/local` uses MinIO as the temporary local S3-compatible backend. That choice is local-stack scaffolding, not a core runtime dependency, and is tracked for follow-up replacement or abstraction work before the stack is treated as v0.1-final.
 
 ## V0 Scope
 
@@ -109,7 +111,7 @@ docker compose -f infra/local/docker-compose.yml up -d
 - Constrained `keyed_upsert` on ordered fixtures
 - Durable control plane and commit ledger
 - Deterministic local failure injection
-- Local real-stack testing (Polaris + MinIO + SQLite)
+- Local real-stack testing (Polaris + a local S3-compatible object store + SQLite)
 - Reconciliation and orphan cleanup
 - Offline compaction utility
 
