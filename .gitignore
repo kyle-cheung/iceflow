@@ -3,3 +3,5 @@ target/
 
 docs/superpowers*
 infra/local/.env
+
+AGENTS.md

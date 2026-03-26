@@ -75,7 +75,11 @@ impl MockPolarisServer {
     }
 
     pub fn last_oauth_body(&self) -> Option<String> {
-        self.oauth.last_body.lock().ok().and_then(|body| body.clone())
+        self.oauth
+            .last_body
+            .lock()
+            .ok()
+            .and_then(|body| body.clone())
     }
 }
 
@@ -98,7 +102,8 @@ fn handle_connection(
 
     let namespace_get = format!("/api/catalog/v1/{warehouse}/namespaces/orders_events");
     let namespace_create = format!("/api/catalog/v1/{warehouse}/namespaces");
-    let namespace_props = format!("/api/catalog/v1/{warehouse}/namespaces/orders_events/properties");
+    let namespace_props =
+        format!("/api/catalog/v1/{warehouse}/namespaces/orders_events/properties");
 
     match (method, path_only) {
         ("POST", "/api/catalog/v1/oauth/tokens") => {
@@ -106,9 +111,8 @@ fn handle_connection(
             respond(stream, 200, "{\"access_token\":\"mock-token\"}")?;
         }
         ("GET", "/api/catalog/v1/config") if path.contains(&format!("warehouse={warehouse}")) => {
-            let json = format!(
-                "{{\"defaults\":{{\"prefix\":\"{warehouse}\"}},\"overrides\":{{}}}}"
-            );
+            let json =
+                format!("{{\"defaults\":{{\"prefix\":\"{warehouse}\"}},\"overrides\":{{}}}}");
             respond(stream, 200, &json)?;
         }
         ("GET", path) if path == namespace_get => {
@@ -127,9 +131,11 @@ fn handle_connection(
         ("POST", path) if path == namespace_create => {
             let namespace = parse_namespace(body).unwrap_or_else(|| "orders_events".to_string());
             let mut state = state.lock().expect("mock state");
-            let entry = state.entry(namespace.clone()).or_insert_with(|| NamespaceState {
-                properties: Arc::new(Mutex::new(BTreeMap::new())),
-            });
+            let entry = state
+                .entry(namespace.clone())
+                .or_insert_with(|| NamespaceState {
+                    properties: Arc::new(Mutex::new(BTreeMap::new())),
+                });
             if let Some(props) = parse_properties(body) {
                 let mut guard = entry.properties.lock().expect("namespace props");
                 guard.extend(props);
@@ -144,13 +150,20 @@ fn handle_connection(
         }
         ("POST", path) if path == namespace_props => {
             let mut state = state.lock().expect("mock state");
-            let entry = state.entry("orders_events".to_string()).or_insert_with(|| NamespaceState {
-                properties: Arc::new(Mutex::new(BTreeMap::new())),
-            });
+            let entry =
+                state
+                    .entry("orders_events".to_string())
+                    .or_insert_with(|| NamespaceState {
+                        properties: Arc::new(Mutex::new(BTreeMap::new())),
+                    });
             let updates = parse_properties(body).unwrap_or_default();
             let mut guard = entry.properties.lock().expect("namespace props");
             guard.extend(updates);
-            respond(stream, 200, "{\"updated\":[],\"removed\":[],\"missing\":[]}")?;
+            respond(
+                stream,
+                200,
+                "{\"updated\":[],\"removed\":[],\"missing\":[]}",
+            )?;
         }
         _ => {
             respond(stream, 404, "{\"error\":{\"message\":\"unknown route\"}}")?;

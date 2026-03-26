@@ -489,8 +489,7 @@ impl<'a> Parser<'a> {
         while let Some(byte) = self.next_byte() {
             match byte {
                 b'"' => {
-                    return String::from_utf8(out)
-                        .map_err(|_| Error::msg("invalid UTF-8 string"))
+                    return String::from_utf8(out).map_err(|_| Error::msg("invalid UTF-8 string"))
                 }
                 b'\\' => {
                     let escaped = self
@@ -628,10 +627,7 @@ mod tests {
         let parsed = parse_json_value("{\"name\":\"café\"}").expect("valid JSON");
         let object = value_as_object(parsed).expect("object value");
 
-        assert_eq!(
-            object.get("name"),
-            Some(&Value::String("café".to_string()))
-        );
+        assert_eq!(object.get("name"), Some(&Value::String("café".to_string())));
     }
 
     #[test]
@@ -639,9 +635,6 @@ mod tests {
         let parsed = parse_json_value("{\"name\":\"caf\\u00e9\"}").expect("valid JSON");
         let object = value_as_object(parsed).expect("object value");
 
-        assert_eq!(
-            object.get("name"),
-            Some(&Value::String("café".to_string()))
-        );
+        assert_eq!(object.get("name"), Some(&Value::String("café".to_string())));
     }
 }

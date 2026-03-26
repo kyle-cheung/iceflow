@@ -157,7 +157,10 @@ fn intake_and_checkpoint_resume_after_budget_clears() {
 
     runtime.clear_in_memory_batch(&table_id);
 
-    assert_eq!(runtime.checkpoint_decision(&table_id), CheckpointDecision::Advanced);
+    assert_eq!(
+        runtime.checkpoint_decision(&table_id),
+        CheckpointDecision::Advanced
+    );
 }
 
 #[test]
@@ -206,7 +209,10 @@ fn durable_pending_clear_reopens_intake_and_checkpointing() {
 
     assert_eq!(runtime.try_admit(&table_id), IntakeDecision::Admitted);
     runtime.clear_in_memory_batch(&table_id);
-    assert_eq!(runtime.checkpoint_decision(&table_id), CheckpointDecision::Advanced);
+    assert_eq!(
+        runtime.checkpoint_decision(&table_id),
+        CheckpointDecision::Advanced
+    );
 }
 
 #[test]

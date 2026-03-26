@@ -32,17 +32,23 @@ fn commit_failure_after_files_written_leaves_batch_recovery_candidates() -> Resu
             .collect();
         store.record_files(batch_id.clone(), files).await?;
         let attempt = store
-            .begin_commit(batch_id.clone(), greytl_state::CommitRequest {
-                destination_uri: "file:///tmp/warehouse/orders_events".to_string(),
-                snapshot: greytl_state::SnapshotRef {
-                    uri: "pending://orders_events/batch-append-0001".to_string(),
+            .begin_commit(
+                batch_id.clone(),
+                greytl_state::CommitRequest {
+                    destination_uri: "file:///tmp/warehouse/orders_events".to_string(),
+                    snapshot: greytl_state::SnapshotRef {
+                        uri: "pending://orders_events/batch-append-0001".to_string(),
+                    },
+                    actor: "integration-test".to_string(),
                 },
-                actor: "integration-test".to_string(),
-            })
+            )
             .await?;
 
         let sink = TestDoubleSink::with_failpoint(SinkFailpoint::FailCommitOnce);
-        let request = with_attempt(sample_append_commit_request(), &attempt.idempotency_key.to_string());
+        let request = with_attempt(
+            sample_append_commit_request(),
+            &attempt.idempotency_key.to_string(),
+        );
         let prepared = sink.prepare_commit(request).await?;
         assert!(sink.commit(prepared).await.is_err());
 
@@ -69,7 +75,9 @@ fn filesystem_sink_can_resolve_uncertain_commit_after_restart() -> Result<()> {
         let outcome = sink.commit(prepared).await?;
 
         let reloaded = FilesystemSink::new(root);
-        let resolution = reloaded.resolve_uncertain_commit(&outcome.attempt()).await?;
+        let resolution = reloaded
+            .resolve_uncertain_commit(&outcome.attempt())
+            .await?;
         assert!(matches!(resolution, ResolvedOutcome::Committed(_)));
         Ok(())
     })
@@ -103,13 +111,16 @@ fn ambiguous_resolution_yields_orphan_candidates_until_cleanup_is_recorded() -> 
         let batch_id = store.register_batch(manifest.clone()).await?;
         let files = manifest_batch_files(&batch_id, &manifest);
         let attempt = store
-            .begin_commit(batch_id.clone(), greytl_state::CommitRequest {
-                destination_uri: "file:///tmp/warehouse/orders_events".to_string(),
-                snapshot: greytl_state::SnapshotRef {
-                    uri: "pending://orders_events/batch-append-0001".to_string(),
+            .begin_commit(
+                batch_id.clone(),
+                greytl_state::CommitRequest {
+                    destination_uri: "file:///tmp/warehouse/orders_events".to_string(),
+                    snapshot: greytl_state::SnapshotRef {
+                        uri: "pending://orders_events/batch-append-0001".to_string(),
+                    },
+                    actor: "integration-test".to_string(),
                 },
-                actor: "integration-test".to_string(),
-            })
+            )
             .await?;
 
         store.record_files(batch_id.clone(), files.clone()).await?;

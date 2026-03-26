@@ -1,7 +1,9 @@
 mod support;
 
 use anyhow::Result;
-use greytl_sink::{CommitRequest, IdempotencyKey, LookupResult, PolarisSink, ResolvedOutcome, Sink};
+use greytl_sink::{
+    CommitRequest, IdempotencyKey, LookupResult, PolarisSink, ResolvedOutcome, Sink,
+};
 use greytl_types::{
     checkpoint, BatchId, BatchManifest, ManifestFile, Operation, SourceClass, TableId, TableMode,
 };
@@ -75,9 +77,14 @@ fn polaris_oauth_client_credentials_are_form_encoded() -> Result<()> {
         let prepared = sink.prepare_commit(request).await?;
         let _committed = sink.commit(prepared).await?;
 
-        let body = server.last_oauth_body().expect("oauth body should be captured");
+        let body = server
+            .last_oauth_body()
+            .expect("oauth body should be captured");
         let params = parse_form_body(&body);
-        assert_eq!(params.get("grant_type").map(String::as_str), Some("client_credentials"));
+        assert_eq!(
+            params.get("grant_type").map(String::as_str),
+            Some("client_credentials")
+        );
         assert_eq!(
             params.get("client_id").map(String::as_str),
             Some("root&ops=admin+lead%west")
@@ -86,7 +93,10 @@ fn polaris_oauth_client_credentials_are_form_encoded() -> Result<()> {
             params.get("client_secret").map(String::as_str),
             Some("s3cr3t&rotate=yes+later%")
         );
-        assert_eq!(params.get("scope").map(String::as_str), Some("PRINCIPAL_ROLE:ALL"));
+        assert_eq!(
+            params.get("scope").map(String::as_str),
+            Some("PRINCIPAL_ROLE:ALL")
+        );
         assert_eq!(params.len(), 4);
         Ok(())
     })
@@ -116,7 +126,9 @@ fn real_stack_append_only_commit_round_trips_against_polaris() -> Result<()> {
         }
 
         match sink.resolve_uncertain_commit(&committed.attempt()).await? {
-            ResolvedOutcome::Committed(found) => assert_eq!(found.snapshot_id, committed.snapshot_id),
+            ResolvedOutcome::Committed(found) => {
+                assert_eq!(found.snapshot_id, committed.snapshot_id)
+            }
             other => panic!("unexpected resolution: {other:?}"),
         }
 
@@ -236,10 +248,8 @@ fn real_stack_env() -> RealStackEnv {
             .unwrap_or_else(|_| "http://127.0.0.1:8181/api/catalog".to_string()),
         catalog_name: env::var("POLARIS_CATALOG_NAME")
             .unwrap_or_else(|_| "quickstart_catalog".to_string()),
-        namespace: env::var("POLARIS_NAMESPACE")
-            .unwrap_or_else(|_| "orders_events".to_string()),
+        namespace: env::var("POLARIS_NAMESPACE").unwrap_or_else(|_| "orders_events".to_string()),
         client_id: env::var("POLARIS_CLIENT_ID").unwrap_or_else(|_| "root".to_string()),
-        client_secret: env::var("POLARIS_CLIENT_SECRET")
-            .unwrap_or_else(|_| "s3cr3t".to_string()),
+        client_secret: env::var("POLARIS_CLIENT_SECRET").unwrap_or_else(|_| "s3cr3t".to_string()),
     }
 }
