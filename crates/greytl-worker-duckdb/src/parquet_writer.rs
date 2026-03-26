@@ -6,10 +6,11 @@ use greytl_types::{BatchId, LogicalMutation, ManifestFile, Operation};
 use libduckdb_sys::{
     duckdb_append_int32, duckdb_append_int64, duckdb_append_null, duckdb_append_timestamp,
     duckdb_append_varchar_length, duckdb_appender, duckdb_appender_begin_row,
-    duckdb_appender_close, duckdb_appender_create, duckdb_appender_destroy, duckdb_appender_end_row,
-    duckdb_appender_error, duckdb_close, duckdb_connect, duckdb_connection, duckdb_database,
-    duckdb_disconnect, duckdb_open, duckdb_query, duckdb_result, duckdb_result_error,
-    duckdb_state_DuckDBSuccess, duckdb_timestamp, DuckDBSuccess,
+    duckdb_appender_close, duckdb_appender_create, duckdb_appender_destroy,
+    duckdb_appender_end_row, duckdb_appender_error, duckdb_close, duckdb_connect,
+    duckdb_connection, duckdb_database, duckdb_disconnect, duckdb_open, duckdb_query,
+    duckdb_result, duckdb_result_error, duckdb_row_count, duckdb_state_DuckDBSuccess,
+    duckdb_timestamp, duckdb_value_int64, DuckDBSuccess,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -41,7 +42,10 @@ pub struct MaterializedBatch {
     pub manifest: BatchManifest,
 }
 
-pub fn materialize_batch(config: &WriterConfig, normalized: NormalizedBatch) -> Result<MaterializedBatch> {
+pub fn materialize_batch(
+    config: &WriterConfig,
+    normalized: NormalizedBatch,
+) -> Result<MaterializedBatch> {
     let batch_id = batch_id_from_batch_file(normalized.batch_file());
     let created_at = Utc::now();
     let output_dir = create_output_dir(batch_id.as_str())?;
@@ -57,14 +61,19 @@ pub fn materialize_batch(config: &WriterConfig, normalized: NormalizedBatch) -> 
             sanitize_identifier(batch_id.as_str()),
             chunk_index
         );
-        let file_path = output_dir.join(format!("{}-{:04}.parquet", batch_id.as_str(), chunk_index));
+        let file_path =
+            output_dir.join(format!("{}-{:04}.parquet", batch_id.as_str(), chunk_index));
 
         db.create_staging_table(&table_name)?;
         db.append_records(&table_name, records)?;
         db.copy_table_to_parquet(&table_name, &file_path, row_group_rows)?;
         db.drop_table(&table_name)?;
 
-        file_set.push(manifest_file(&file_path, records.len() as u64, created_at.clone())?);
+        file_set.push(manifest_file(
+            &file_path,
+            records.len() as u64,
+            created_at.clone(),
+        )?);
     }
 
     let manifest = BatchManifest {
@@ -90,13 +99,13 @@ pub fn materialize_batch(config: &WriterConfig, normalized: NormalizedBatch) -> 
     Ok(MaterializedBatch { manifest })
 }
 
-struct DuckDb {
+pub(crate) struct DuckDb {
     database: duckdb_database,
     connection: duckdb_connection,
 }
 
 impl DuckDb {
-    fn open_in_memory() -> Result<Self> {
+    pub(crate) fn open_in_memory() -> Result<Self> {
         let mut database = ptr::null_mut();
         let open_state = unsafe { duckdb_open(ptr::null(), &mut database) };
         if open_state != DuckDBSuccess {
@@ -197,6 +206,75 @@ impl DuckDb {
         self.execute(&format!("DROP TABLE IF EXISTS {table_name}"))
     }
 
+    pub(crate) fn create_parquet_view(
+        &self,
+        view_name: &str,
+        input_files: &[PathBuf],
+    ) -> Result<()> {
+        if input_files.is_empty() {
+            anyhow::bail!("input_files cannot be empty");
+        }
+
+        let file_list = input_files
+            .iter()
+            .map(|path| format!("'{}'", escape_sql_string(&path.display().to_string())))
+            .collect::<Vec<_>>()
+            .join(",");
+        self.execute(&format!(
+            "CREATE TEMP VIEW {view_name} AS SELECT * FROM read_parquet([{file_list}])"
+        ))
+    }
+
+    pub(crate) fn count_rows(&self, source_name: &str) -> Result<u64> {
+        let query = c_string(&format!(
+            "SELECT COUNT(*)::BIGINT AS row_count FROM {source_name}"
+        ))?;
+        let mut result: duckdb_result = unsafe { mem::zeroed() };
+        let state = unsafe { duckdb_query(self.connection, query.as_ptr(), &mut result) };
+        if state != DuckDBSuccess {
+            let message = unsafe { c_string_from_ptr(duckdb_result_error(&mut result)) };
+            unsafe {
+                libduckdb_sys::duckdb_destroy_result(&mut result);
+            }
+            anyhow::bail!("duckdb_query failed: {}", message);
+        }
+
+        let rows = unsafe { duckdb_row_count(&mut result) };
+        if rows == 0 {
+            unsafe {
+                libduckdb_sys::duckdb_destroy_result(&mut result);
+            }
+            anyhow::bail!("duckdb_query returned no rows");
+        }
+
+        let count = unsafe { duckdb_value_int64(&mut result, 0, 0) };
+        unsafe {
+            libduckdb_sys::duckdb_destroy_result(&mut result);
+        }
+        Ok(count.max(0) as u64)
+    }
+
+    pub(crate) fn copy_view_slice_to_parquet(
+        &self,
+        source_name: &str,
+        file_path: &Path,
+        row_group_rows: usize,
+        chunk_rows: usize,
+        offset: u64,
+    ) -> Result<()> {
+        self.execute(&format!(
+            "COPY (SELECT * FROM {source_name} LIMIT {} OFFSET {}) TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {})",
+            chunk_rows.max(1),
+            offset,
+            escape_sql_string(&file_path.display().to_string()),
+            row_group_rows.max(1)
+        ))
+    }
+
+    pub(crate) fn drop_view(&self, view_name: &str) -> Result<()> {
+        self.execute(&format!("DROP VIEW IF EXISTS {view_name}"))
+    }
+
     fn execute(&self, sql: &str) -> Result<()> {
         let query = c_string(sql)?;
         let mut result: duckdb_result = unsafe { mem::zeroed() };
@@ -294,7 +372,7 @@ impl Drop for DuckDbAppender {
     }
 }
 
-fn rows_for_target(target_bytes: u64, average_record_bytes: usize) -> usize {
+pub(crate) fn rows_for_target(target_bytes: u64, average_record_bytes: usize) -> usize {
     if target_bytes == 0 {
         return 1;
     }
@@ -315,10 +393,14 @@ fn estimated_record_size(record: &LogicalMutation) -> usize {
     mutation_signature(record).len().max(1)
 }
 
-fn manifest_file(path: &Path, record_count: u64, created_at: DateTime<Utc>) -> Result<ManifestFile> {
+pub(crate) fn manifest_file(
+    path: &Path,
+    record_count: u64,
+    created_at: DateTime<Utc>,
+) -> Result<ManifestFile> {
     let content_hash = file_hash(path)?;
-    let metadata = fs::metadata(path)
-        .map_err(|err| Error::msg(format!("{}: {err}", path.display())))?;
+    let metadata =
+        fs::metadata(path).map_err(|err| Error::msg(format!("{}: {err}", path.display())))?;
 
     Ok(ManifestFile {
         file_uri: file_uri(path),
@@ -404,7 +486,7 @@ fn create_output_dir(batch_id: &str) -> Result<PathBuf> {
     Ok(root)
 }
 
-fn sanitize_identifier(value: &str) -> String {
+pub(crate) fn sanitize_identifier(value: &str) -> String {
     let sanitized: String = value
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
@@ -580,7 +662,8 @@ mod tests {
     #[test]
     fn parquet_manifest_freezes_ordering_span_and_checksum() {
         let worker = DuckDbWorker::in_memory().expect("worker");
-        let output = run_ready(worker.materialize(sample_customer_state_batch())).expect("materialized batch");
+        let output = run_ready(worker.materialize(sample_customer_state_batch()))
+            .expect("materialized batch");
 
         assert_eq!(output.manifest.ordering_min, 1);
         assert_eq!(output.manifest.ordering_max, 10_000);
@@ -593,14 +676,13 @@ mod tests {
 
     #[test]
     fn parquet_writer_rolls_files_when_target_budget_is_small() {
-        let worker = DuckDbWorker::with_config(
-            WriterConfig {
-                target_file_bytes: 1,
-                max_row_group_bytes: 1,
-            },
-        )
+        let worker = DuckDbWorker::with_config(WriterConfig {
+            target_file_bytes: 1,
+            max_row_group_bytes: 1,
+        })
         .expect("worker");
-        let output = run_ready(worker.materialize(sample_append_only_batch())).expect("materialized batch");
+        let output =
+            run_ready(worker.materialize(sample_append_only_batch())).expect("materialized batch");
 
         assert!(output.manifest.file_set.len() >= 2);
         assert_eq!(output.manifest.record_count, 3);
@@ -618,7 +700,11 @@ mod tests {
             batch_file: "fixtures/customer_state/batch-0003.jsonl".to_string(),
             records: vec![
                 customer_upsert(7, 1, Some(json!({ "customer_id": 7, "status": "trial" }))),
-                customer_upsert(7, 10_000, Some(json!({ "customer_id": 7, "status": "active" }))),
+                customer_upsert(
+                    7,
+                    10_000,
+                    Some(json!({ "customer_id": 7, "status": "active" })),
+                ),
                 customer_delete(8, 5_000),
             ],
         }
@@ -635,7 +721,11 @@ mod tests {
         }
     }
 
-    fn customer_upsert(customer_id: i64, ordering_value: i64, after: Option<serde_json::Value>) -> LogicalMutation {
+    fn customer_upsert(
+        customer_id: i64,
+        ordering_value: i64,
+        after: Option<serde_json::Value>,
+    ) -> LogicalMutation {
         let builder = LogicalMutation::upsert(
             table_id("customer_state"),
             "source-a",
