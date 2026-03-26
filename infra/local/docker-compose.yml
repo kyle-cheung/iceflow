@@ -38,6 +38,25 @@ services:
     working_dir: /workspace
     entrypoint: ["/bin/sh", "/workspace/infra/local/object-store-init.sh"]
 
+  object-store-probe:
+    image: public.ecr.aws/aws-cli/aws-cli:2.27.41
+    profiles: ["verify"]
+    depends_on:
+      object-store:
+        condition: service_healthy
+      object-store-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: ${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}
+      AWS_SECRET_ACCESS_KEY: ${OBJECT_STORE_SECRET_KEY:-rustfsadmin}
+      AWS_DEFAULT_REGION: us-west-2
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-greytl-warehouse}
+      OBJECT_STORE_ENDPOINT: http://object-store:9000
+    volumes:
+      - ../..:/workspace
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/infra/local/object-store-probe.sh"]
+
   polaris:
     image: apache/polaris:latest
     depends_on:
