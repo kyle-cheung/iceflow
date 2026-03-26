@@ -33,7 +33,7 @@ jobs:
       - name: Start local Polaris stack
         run: docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml up -d --wait
       - name: Run raw object-store probe
-        run: docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml --profile verify run --rm object-store-probe
+        run: docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml --profile verify run --rm --no-deps object-store-probe
       - name: Run real-stack smoke tests
         run: |
           . infra/local/.env

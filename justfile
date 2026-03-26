@@ -18,7 +18,8 @@ stack-down:
 
 test-local-object-store:
     test -f infra/local/.env || cp infra/local/.env.example infra/local/.env
-    docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml --profile verify run --rm object-store-probe
+    docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml up -d --wait
+    docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml --profile verify run --rm --no-deps object-store-probe
 
 test-real-stack:
     test -f infra/local/.env || cp infra/local/.env.example infra/local/.env
