@@ -70,6 +70,9 @@ impl PolarisCompactionCatalog {
 
 impl CompactionCatalog for PolarisCompactionCatalog {
     fn validate_target(&self) -> Result<()> {
+        // TODO(task9-followup): mirror PolarisSink auth support here. The current
+        // compact CLI contract does not accept bearer tokens or client credentials,
+        // so this preflight only works against unauthenticated Polaris endpoints.
         let config = self
             .client
             .get(self.config_url()?)
