@@ -1,22 +1,47 @@
 use std::future::Future;
 use std::pin::pin;
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
 
 use greytl_sink::CommitRequest;
+
+pub mod polaris_mock;
 
 pub fn block_on<F>(future: F) -> F::Output
 where
     F: Future,
 {
-    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
+    let parker = Arc::new(ThreadWaker {
+        thread: std::thread::current(),
+        notified: AtomicBool::new(false),
+    });
+    let waker = Waker::from(Arc::clone(&parker));
     let mut future = pin!(future);
     let mut cx = Context::from_waker(&waker);
 
     loop {
+        parker.notified.store(false, Ordering::Release);
         match future.as_mut().poll(&mut cx) {
             Poll::Ready(value) => return value,
-            Poll::Pending => std::thread::yield_now(),
+            Poll::Pending => {
+                while !parker.notified.swap(false, Ordering::AcqRel) {
+                    std::thread::park();
+                }
+            }
         }
+    }
+}
+
+struct ThreadWaker {
+    thread: std::thread::Thread,
+    notified: AtomicBool,
+}
+
+impl Wake for ThreadWaker {
+    fn wake(self: Arc<Self>) {
+        self.notified.store(true, Ordering::Release);
+        self.thread.unpark();
     }
 }
 
@@ -42,16 +67,3 @@ pub fn sample_source_file_uri(name: &str) -> String {
     std::fs::write(&path, b"parquet-fixture").expect("write source fixture file");
     format!("file://{}", path.display())
 }
-
-unsafe fn dummy_raw_waker() -> RawWaker {
-    RawWaker::new(std::ptr::null(), &DUMMY_WAKER_VTABLE)
-}
-
-unsafe fn clone_dummy(_: *const ()) -> RawWaker {
-    unsafe { dummy_raw_waker() }
-}
-
-unsafe fn wake_dummy(_: *const ()) {}
-
-static DUMMY_WAKER_VTABLE: RawWakerVTable =
-    RawWakerVTable::new(clone_dummy, wake_dummy, wake_dummy, wake_dummy);

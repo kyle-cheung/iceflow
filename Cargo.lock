@@ -242,6 +242,15 @@ dependencies = [
 [[package]]
 name = "greytl-cli"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "greytl-runtime",
+ "greytl-sink",
+ "greytl-source",
+ "greytl-state",
+ "greytl-types",
+ "greytl-worker-duckdb",
+]
 
 [[package]]
 name = "greytl-runtime"
@@ -260,7 +269,10 @@ dependencies = [
  "greytl-state",
  "greytl-types",
  "greytl-worker-duckdb",
+ "reqwest",
+ "serde",
  "serde_json 0.1.0",
+ "serde_json 1.0.149",
 ]
 
 [[package]]

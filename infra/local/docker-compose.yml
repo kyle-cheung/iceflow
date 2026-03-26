@@ -1,0 +1,61 @@
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    volumes:
+      - ../..:/workspace
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/infra/local/minio-init.sh"]
+
+  polaris:
+    image: apache/polaris:latest
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_REGION: us-west-2
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      POLARIS_BOOTSTRAP_CREDENTIALS: ${POLARIS_REALM},${POLARIS_ROOT_CLIENT_ID},${POLARIS_ROOT_CLIENT_SECRET}
+      polaris.realm-context.realms: ${POLARIS_REALM}
+      quarkus.otel.sdk.disabled: "true"
+    ports:
+      - "${POLARIS_API_PORT}:8181"
+      - "${POLARIS_MANAGEMENT_PORT}:8182"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  polaris-bootstrap:
+    image: alpine/curl:8.17.0
+    depends_on:
+      polaris:
+        condition: service_healthy
+    environment:
+      POLARIS_REALM: ${POLARIS_REALM}
+      POLARIS_ROOT_CLIENT_ID: ${POLARIS_ROOT_CLIENT_ID}
+      POLARIS_ROOT_CLIENT_SECRET: ${POLARIS_ROOT_CLIENT_SECRET}
+      POLARIS_CATALOG_NAME: ${POLARIS_CATALOG_NAME}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    volumes:
+      - ../..:/workspace
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/infra/local/polaris-bootstrap.sh"]
