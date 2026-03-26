@@ -1,42 +1,77 @@
 services:
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+  object-store:
+    image: rustfs/rustfs:1.0.0-alpha.76
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      RUSTFS_VOLUMES: /data/rustfs{0..3}
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${OBJECT_STORE_SECRET_KEY:-rustfsadmin}
+      RUSTFS_OBS_LOG_DIRECTORY: /logs
     ports:
-      - "${MINIO_API_PORT}:9000"
-      - "${MINIO_CONSOLE_PORT}:9001"
+      - "${OBJECT_STORE_API_PORT:-9000}:9000"
+      - "${OBJECT_STORE_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - object_store_data:/data
+      - object_store_logs:/logs
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://127.0.0.1:9000/health && curl -f http://127.0.0.1:9001/rustfs/console/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 40s
 
-  minio-init:
-    image: minio/mc:latest
+  object-store-init:
+    image: public.ecr.aws/aws-cli/aws-cli:2.27.41
     depends_on:
-      - minio
+      object-store:
+        condition: service_healthy
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: ${MINIO_BUCKET}
+      AWS_ACCESS_KEY_ID: ${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}
+      AWS_SECRET_ACCESS_KEY: ${OBJECT_STORE_SECRET_KEY:-rustfsadmin}
+      AWS_DEFAULT_REGION: us-west-2
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-greytl-warehouse}
+      OBJECT_STORE_ENDPOINT: http://object-store:9000
     volumes:
       - ../..:/workspace
     working_dir: /workspace
-    entrypoint: ["/bin/sh", "/workspace/infra/local/minio-init.sh"]
+    entrypoint: ["/bin/sh", "/workspace/infra/local/object-store-init.sh"]
+
+  object-store-probe:
+    image: public.ecr.aws/aws-cli/aws-cli:2.27.41
+    profiles: ["verify"]
+    depends_on:
+      object-store:
+        condition: service_healthy
+      object-store-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: ${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}
+      AWS_SECRET_ACCESS_KEY: ${OBJECT_STORE_SECRET_KEY:-rustfsadmin}
+      AWS_DEFAULT_REGION: us-west-2
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-greytl-warehouse}
+      OBJECT_STORE_ENDPOINT: http://object-store:9000
+    volumes:
+      - ../..:/workspace
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/infra/local/object-store-probe.sh"]
 
   polaris:
     image: apache/polaris:latest
     depends_on:
-      minio-init:
+      object-store-init:
         condition: service_completed_successfully
     environment:
       AWS_REGION: us-west-2
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}
+      AWS_SECRET_ACCESS_KEY: ${OBJECT_STORE_SECRET_KEY:-rustfsadmin}
       POLARIS_BOOTSTRAP_CREDENTIALS: ${POLARIS_REALM},${POLARIS_ROOT_CLIENT_ID},${POLARIS_ROOT_CLIENT_SECRET}
       polaris.realm-context.realms: ${POLARIS_REALM}
       quarkus.otel.sdk.disabled: "true"
     ports:
-      - "${POLARIS_API_PORT}:8181"
-      - "${POLARIS_MANAGEMENT_PORT}:8182"
+      - "${POLARIS_API_PORT:-8181}:8181"
+      - "${POLARIS_MANAGEMENT_PORT:-8182}:8182"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]
       interval: 2s
@@ -53,9 +88,14 @@ services:
       POLARIS_REALM: ${POLARIS_REALM}
       POLARIS_ROOT_CLIENT_ID: ${POLARIS_ROOT_CLIENT_ID}
       POLARIS_ROOT_CLIENT_SECRET: ${POLARIS_ROOT_CLIENT_SECRET}
-      POLARIS_CATALOG_NAME: ${POLARIS_CATALOG_NAME}
-      MINIO_BUCKET: ${MINIO_BUCKET}
+      POLARIS_CATALOG_NAME: ${POLARIS_CATALOG_NAME:-quickstart_catalog}
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-greytl-warehouse}
+      OBJECT_STORE_API_PORT: ${OBJECT_STORE_API_PORT:-9000}
     volumes:
       - ../..:/workspace
     working_dir: /workspace
     entrypoint: ["/bin/sh", "/workspace/infra/local/polaris-bootstrap.sh"]
+
+volumes:
+  object_store_data:
+  object_store_logs:

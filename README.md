@@ -101,7 +101,9 @@ cargo run -p greytl-cli -- compact --warehouse <path>
 docker compose -f infra/local/docker-compose.yml up -d
 ```
 
-Current `infra/local` uses MinIO as the temporary local S3-compatible backend. That choice is local-stack scaffolding, not a core runtime dependency, and is tracked for follow-up replacement or abstraction work before the stack is treated as v0.1-final.
+Current `infra/local` uses RustFS as the current default local S3-compatible backend. That choice is local-stack scaffolding, not a core runtime dependency. Task 8b validates the local object-store contract through Polaris bootstrap plus a raw S3 path-style probe; it does not yet prove end-to-end greytl data-file writes through that S3-compatible store because the current Polaris sink path still stages committed files into a local `file://` warehouse. Production guidance remains direct cloud object storage, especially AWS S3.
+
+Task 8b audited `crates/greytl-sink/src/polaris.rs` and `infra/local/polaris-bootstrap.sh` and found no presigned URL usage in the current Polaris local-stack path, so the RustFS compatibility gate excludes presigned URL verification for this task.
 
 ## V0 Scope
 
