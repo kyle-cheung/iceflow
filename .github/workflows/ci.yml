@@ -5,24 +5,27 @@ on:
   push:
     branches:
       - main
-      - kcheung/**
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   workspace:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Show cargo version
         run: cargo --version
       - name: Run workspace tests
         run: cargo test --workspace
-      - name: Run workspace check
-        run: cargo check --workspace
 
   real-stack:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Prepare local stack env
         run: cp infra/local/.env.example infra/local/.env
       - name: Validate compose config
