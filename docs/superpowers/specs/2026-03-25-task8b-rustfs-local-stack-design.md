@@ -65,6 +65,7 @@ If RustFS requires additional backend-specific env vars to start, those may rema
 
 - rename the MinIO services to generic object-store service names
 - switch the default backend image and startup wiring from MinIO to RustFS
+- pin the RustFS image to a specific version or digest rather than `latest` so local and CI behavior stay deterministic
 - feed Polaris from the generic `OBJECT_STORE_*` env surface
 - keep provider-specific configuration localized to the RustFS service definition
 - add an `object-store-init` helper container only if RustFS needs a separate deterministic bootstrap step
@@ -76,12 +77,15 @@ If RustFS requires additional backend-specific env vars to start, those may rema
 - own deterministic bucket creation for the local object store
 - operate against the same endpoint and credentials the stack exposes to Polaris
 - be generic in name and interface, even if the first implementation uses backend-specific tooling internally
+- fail loudly on bucket bootstrap errors, especially if the first implementation uses `mc` internally
 
 `infra/local/polaris-bootstrap.sh` should:
 
 - consume only generic object-store env names
 - configure Polaris with the same bucket, endpoint, internal endpoint, and path-style setting used by the compatibility gate
 - avoid any MinIO-branded naming
+
+`infra/local/minio-init.sh` should be treated as replaced by `infra/local/object-store-init.sh` and removed from the default local stack wiring once Task 8b lands.
 
 ### 6.3 Local Env And Docs
 
@@ -100,7 +104,12 @@ RustFS becomes the default local backend only if it passes this gate.
 The following must all be true:
 
 - `docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml config` succeeds
-- the local stack starts successfully with Polaris and the RustFS-backed object store
+- the local stack reaches healthy startup with Polaris and the RustFS-backed object store:
+  - the object-store service passes its configured health check
+  - `object-store-init`, if present, exits with status `0`
+  - the Polaris health endpoint returns `200`
+- the raw S3 compatibility probe passes against the same object-store endpoint, bucket, credentials, and path-style configuration Polaris uses
+- the presigned URL audit is documented with a written finding before RustFS is treated as passing the spike
 - the existing ignored real-stack Polaris smoke tests pass unchanged
 - no changes are required in `greytl-sink`, runtime, worker, or state crates
 
@@ -149,6 +158,7 @@ Task 8b verification should cover:
 - compose config validity
 - local stack startup health
 - raw S3 compatibility probe against the RustFS default backend
+- the documented presigned URL audit finding and whether presigned URL verification is included or explicitly excluded
 - unchanged real-stack Polaris smoke tests
 - updated docs and plan text that describe the stack generically while naming RustFS as the current default local backend
 
