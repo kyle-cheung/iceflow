@@ -250,6 +250,9 @@ dependencies = [
  "greytl-state",
  "greytl-types",
  "greytl-worker-duckdb",
+ "reqwest",
+ "serde",
+ "serde_json 1.0.149",
 ]
 
 [[package]]

@@ -202,7 +202,7 @@ impl DuckDb {
         ))
     }
 
-    fn drop_table(&self, table_name: &str) -> Result<()> {
+    pub(crate) fn drop_table(&self, table_name: &str) -> Result<()> {
         self.execute(&format!("DROP TABLE IF EXISTS {table_name}"))
     }
 
@@ -222,6 +222,16 @@ impl DuckDb {
             .join(",");
         self.execute(&format!(
             "CREATE TEMP VIEW {view_name} AS SELECT * FROM read_parquet([{file_list}])"
+        ))
+    }
+
+    pub(crate) fn create_temp_table_from_source(
+        &self,
+        table_name: &str,
+        source_name: &str,
+    ) -> Result<()> {
+        self.execute(&format!(
+            "CREATE TEMP TABLE {table_name} AS SELECT * FROM {source_name}"
         ))
     }
 
@@ -254,18 +264,17 @@ impl DuckDb {
         Ok(count.max(0) as u64)
     }
 
-    pub(crate) fn copy_view_slice_to_parquet(
+    pub(crate) fn copy_table_slice_to_parquet(
         &self,
-        source_name: &str,
+        table_name: &str,
         file_path: &Path,
         row_group_rows: usize,
         chunk_rows: usize,
         offset: u64,
     ) -> Result<()> {
         self.execute(&format!(
-            "COPY (SELECT * FROM {source_name} LIMIT {} OFFSET {}) TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {})",
-            chunk_rows.max(1),
-            offset,
+            "COPY ({}) TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {})",
+            copy_table_slice_query(table_name, chunk_rows.max(1), offset),
             escape_sql_string(&file_path.display().to_string()),
             row_group_rows.max(1)
         ))
@@ -273,6 +282,34 @@ impl DuckDb {
 
     pub(crate) fn drop_view(&self, view_name: &str) -> Result<()> {
         self.execute(&format!("DROP VIEW IF EXISTS {view_name}"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn query_i64(&self, sql: &str) -> Result<i64> {
+        let query = c_string(sql)?;
+        let mut result: duckdb_result = unsafe { mem::zeroed() };
+        let state = unsafe { duckdb_query(self.connection, query.as_ptr(), &mut result) };
+        if state != DuckDBSuccess {
+            let message = unsafe { c_string_from_ptr(duckdb_result_error(&mut result)) };
+            unsafe {
+                libduckdb_sys::duckdb_destroy_result(&mut result);
+            }
+            anyhow::bail!("duckdb_query failed: {}", message);
+        }
+
+        let rows = unsafe { duckdb_row_count(&mut result) };
+        if rows == 0 {
+            unsafe {
+                libduckdb_sys::duckdb_destroy_result(&mut result);
+            }
+            anyhow::bail!("duckdb_query returned no rows");
+        }
+
+        let value = unsafe { duckdb_value_int64(&mut result, 0, 0) };
+        unsafe {
+            libduckdb_sys::duckdb_destroy_result(&mut result);
+        }
+        Ok(value)
     }
 
     fn execute(&self, sql: &str) -> Result<()> {
@@ -378,6 +415,14 @@ pub(crate) fn rows_for_target(target_bytes: u64, average_record_bytes: usize) ->
     }
 
     ((target_bytes as usize) / average_record_bytes.max(1)).max(1)
+}
+
+pub(crate) fn copy_table_slice_query(table_name: &str, chunk_rows: usize, offset: u64) -> String {
+    format!(
+        "SELECT * FROM {table_name} ORDER BY rowid LIMIT {} OFFSET {}",
+        chunk_rows.max(1),
+        offset
+    )
 }
 
 fn average_record_bytes(records: &[LogicalMutation]) -> usize {
@@ -655,7 +700,7 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeMap;
 
-    use crate::parquet_writer::json_text;
+    use crate::parquet_writer::{copy_table_slice_query, json_text};
     use crate::test_support::run_ready;
     use crate::{DuckDbWorker, WriterConfig};
 
@@ -693,6 +738,14 @@ mod tests {
         let value = serde_json::Value::String("bad\u{0008}\u{000c}\u{0001}\n\r\t".to_string());
 
         assert_eq!(json_text(&value), "\"bad\\b\\f\\u0001\\n\\r\\t\"");
+    }
+
+    #[test]
+    fn copy_table_slice_query_orders_by_rowid_for_stable_chunking() {
+        let query = copy_table_slice_query("compaction_rows", 10, 20);
+
+        assert!(query.contains("ORDER BY rowid"));
+        assert!(query.contains("LIMIT 10 OFFSET 20"));
     }
 
     fn sample_customer_state_batch() -> SourceBatch {
