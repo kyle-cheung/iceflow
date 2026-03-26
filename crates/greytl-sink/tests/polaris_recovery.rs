@@ -34,7 +34,9 @@ fn polaris_sink_resolves_committed_attempt_after_recreate() -> Result<()> {
             format!("file://{}", root.join("warehouse/orders_events").display()),
         )
         .with_client_credentials("root", "s3cr3t");
-        let resolution = reloaded.resolve_uncertain_commit(&committed.attempt()).await?;
+        let resolution = reloaded
+            .resolve_uncertain_commit(&committed.attempt())
+            .await?;
         match resolution {
             ResolvedOutcome::Committed(outcome) => {
                 assert_eq!(outcome.snapshot_id, committed.snapshot_id);
@@ -71,8 +73,13 @@ fn real_stack_recovery_resolves_committed_attempt_after_recreate() -> Result<()>
             format!("file://{}", root.join("warehouse/orders_events").display()),
         )
         .with_client_credentials(env.client_id, env.client_secret);
-        match reloaded.resolve_uncertain_commit(&committed.attempt()).await? {
-            ResolvedOutcome::Committed(found) => assert_eq!(found.snapshot_id, committed.snapshot_id),
+        match reloaded
+            .resolve_uncertain_commit(&committed.attempt())
+            .await?
+        {
+            ResolvedOutcome::Committed(found) => {
+                assert_eq!(found.snapshot_id, committed.snapshot_id)
+            }
             other => panic!("unexpected resolution: {other:?}"),
         }
         Ok(())
@@ -140,10 +147,8 @@ fn real_stack_env() -> RealStackEnv {
             .unwrap_or_else(|_| "http://127.0.0.1:8181/api/catalog".to_string()),
         catalog_name: env::var("POLARIS_CATALOG_NAME")
             .unwrap_or_else(|_| "quickstart_catalog".to_string()),
-        namespace: env::var("POLARIS_NAMESPACE")
-            .unwrap_or_else(|_| "orders_events".to_string()),
+        namespace: env::var("POLARIS_NAMESPACE").unwrap_or_else(|_| "orders_events".to_string()),
         client_id: env::var("POLARIS_CLIENT_ID").unwrap_or_else(|_| "root".to_string()),
-        client_secret: env::var("POLARIS_CLIENT_SECRET")
-            .unwrap_or_else(|_| "s3cr3t".to_string()),
+        client_secret: env::var("POLARIS_CLIENT_SECRET").unwrap_or_else(|_| "s3cr3t".to_string()),
     }
 }

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use anyhow::Result;
+use anyhow::{Error, Result};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -12,16 +12,10 @@ struct NamespaceState {
     properties: Arc<Mutex<BTreeMap<String, String>>>,
 }
 
-#[derive(Clone, Default)]
-struct OAuthState {
-    last_body: Arc<Mutex<Option<String>>>,
-}
-
 pub struct MockPolarisServer {
     base_uri: String,
     warehouse: String,
     state: Arc<Mutex<BTreeMap<String, NamespaceState>>>,
-    oauth: OAuthState,
     _worker: thread::JoinHandle<()>,
 }
 
@@ -31,9 +25,7 @@ impl MockPolarisServer {
         let base_uri = format!("http://{}", listener.local_addr().expect("local addr"));
         let warehouse = warehouse.into();
         let state = Arc::new(Mutex::new(BTreeMap::new()));
-        let oauth = OAuthState::default();
         let state_for_thread = Arc::clone(&state);
-        let oauth_for_thread = oauth.clone();
         let warehouse_for_thread = warehouse.clone();
         let worker = thread::spawn(move || {
             for incoming in listener.incoming() {
@@ -42,9 +34,12 @@ impl MockPolarisServer {
                     Err(_) => continue,
                 };
                 let state = Arc::clone(&state_for_thread);
-                let oauth = oauth_for_thread.clone();
-                if handle_connection(&mut stream, &warehouse_for_thread, state, oauth).is_err() {
-                    let _ = respond(&mut stream, 500, "{}");
+                if handle_connection(&mut stream, &warehouse_for_thread, state).is_err() {
+                    let _ = respond(
+                        &mut stream,
+                        500,
+                        "{\"error\":{\"message\":\"mock failure\"}}",
+                    );
                 }
             }
         });
@@ -53,7 +48,6 @@ impl MockPolarisServer {
             base_uri,
             warehouse,
             state,
-            oauth,
             _worker: worker,
         }
     }
@@ -73,54 +67,43 @@ impl MockPolarisServer {
             .and_then(|state| state.get(namespace).cloned())
             .and_then(|entry| entry.properties.lock().ok().map(|props| props.clone()))
     }
-
-    pub fn last_oauth_body(&self) -> Option<String> {
-        self.oauth
-            .last_body
-            .lock()
-            .ok()
-            .and_then(|body| body.clone())
-    }
 }
 
 fn handle_connection(
     stream: &mut TcpStream,
     warehouse: &str,
     state: Arc<Mutex<BTreeMap<String, NamespaceState>>>,
-    oauth: OAuthState,
 ) -> Result<()> {
     let request = read_request(stream)?;
     let mut parts = request.split("\r\n\r\n");
     let head = parts.next().unwrap_or_default();
     let body = parts.next().unwrap_or_default();
-    let mut lines = head.lines();
-    let request_line = lines.next().unwrap_or_default();
+    let request_line = head.lines().next().unwrap_or_default();
     let mut request_parts = request_line.split_whitespace();
     let method = request_parts.next().unwrap_or_default();
     let path = request_parts.next().unwrap_or_default();
     let path_only = path.split('?').next().unwrap_or(path);
 
-    let namespace_get = format!("/api/catalog/v1/{warehouse}/namespaces/orders_events");
+    let namespace = "orders_events";
+    let namespace_get = format!("/api/catalog/v1/{warehouse}/namespaces/{namespace}");
     let namespace_create = format!("/api/catalog/v1/{warehouse}/namespaces");
-    let namespace_props =
-        format!("/api/catalog/v1/{warehouse}/namespaces/orders_events/properties");
+    let namespace_props = format!("/api/catalog/v1/{warehouse}/namespaces/{namespace}/properties");
 
     match (method, path_only) {
-        ("POST", "/api/catalog/v1/oauth/tokens") => {
-            *oauth.last_body.lock().expect("oauth body") = Some(body.to_string());
-            respond(stream, 200, "{\"access_token\":\"mock-token\"}")?;
-        }
         ("GET", "/api/catalog/v1/config") if path.contains(&format!("warehouse={warehouse}")) => {
             let json =
                 format!("{{\"defaults\":{{\"prefix\":\"{warehouse}\"}},\"overrides\":{{}}}}");
             respond(stream, 200, &json)?;
         }
-        ("GET", path) if path == namespace_get => {
+        ("GET", current) if current == namespace_get => {
             let state = state.lock().expect("mock state");
-            if let Some(namespace) = state.get("orders_events") {
-                let properties = namespace.properties.lock().expect("namespace props");
+            if let Some(namespace_state) = state.get(namespace) {
+                let properties = namespace_state
+                    .properties
+                    .lock()
+                    .expect("namespace properties");
                 let json = format!(
-                    "{{\"namespace\":[\"orders_events\"],\"properties\":{}}}",
+                    "{{\"namespace\":[\"{namespace}\"],\"properties\":{}}}",
                     json_object(&properties)
                 );
                 respond(stream, 200, &json)?;
@@ -128,37 +111,45 @@ fn handle_connection(
                 respond(stream, 404, "{\"error\":{\"message\":\"not found\"}}")?;
             }
         }
-        ("POST", path) if path == namespace_create => {
-            let namespace = parse_namespace(body).unwrap_or_else(|| "orders_events".to_string());
+        ("POST", current) if current == namespace_create => {
             let mut state = state.lock().expect("mock state");
-            let entry = state
-                .entry(namespace.clone())
-                .or_insert_with(|| NamespaceState {
-                    properties: Arc::new(Mutex::new(BTreeMap::new())),
-                });
-            if let Some(props) = parse_properties(body) {
-                let mut guard = entry.properties.lock().expect("namespace props");
-                guard.extend(props);
-            }
-            let props = entry.properties.lock().expect("namespace props");
-            let json = format!(
-                "{{\"namespace\":[\"{}\"],\"properties\":{}}}",
-                namespace,
-                json_object(&props)
-            );
-            respond(stream, 200, &json)?;
-        }
-        ("POST", path) if path == namespace_props => {
-            let mut state = state.lock().expect("mock state");
-            let entry =
+            let namespace_state =
                 state
-                    .entry("orders_events".to_string())
+                    .entry(namespace.to_string())
                     .or_insert_with(|| NamespaceState {
                         properties: Arc::new(Mutex::new(BTreeMap::new())),
                     });
-            let updates = parse_properties(body).unwrap_or_default();
-            let mut guard = entry.properties.lock().expect("namespace props");
-            guard.extend(updates);
+            if let Some(updates) = parse_updates(body) {
+                let mut properties = namespace_state
+                    .properties
+                    .lock()
+                    .expect("namespace properties");
+                properties.extend(updates);
+            }
+            let properties = namespace_state
+                .properties
+                .lock()
+                .expect("namespace properties");
+            let json = format!(
+                "{{\"namespace\":[\"{namespace}\"],\"properties\":{}}}",
+                json_object(&properties)
+            );
+            respond(stream, 200, &json)?;
+        }
+        ("POST", current) if current == namespace_props => {
+            let mut state = state.lock().expect("mock state");
+            let namespace_state =
+                state
+                    .entry(namespace.to_string())
+                    .or_insert_with(|| NamespaceState {
+                        properties: Arc::new(Mutex::new(BTreeMap::new())),
+                    });
+            let updates = parse_updates(body).unwrap_or_default();
+            let mut properties = namespace_state
+                .properties
+                .lock()
+                .expect("namespace properties");
+            properties.extend(updates);
             respond(
                 stream,
                 200,
@@ -180,7 +171,7 @@ fn read_request(stream: &mut TcpStream) -> Result<String> {
         let mut byte = [0u8; 1];
         let read = stream
             .read(&mut byte)
-            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+            .map_err(|err| Error::msg(err.to_string()))?;
         if read == 0 {
             break;
         }
@@ -191,7 +182,7 @@ fn read_request(stream: &mut TcpStream) -> Result<String> {
         }
     }
 
-    let header_end = header_end.ok_or_else(|| anyhow::Error::msg("missing request headers"))?;
+    let header_end = header_end.ok_or_else(|| Error::msg("missing request headers"))?;
     let headers = String::from_utf8_lossy(&buffer[..header_end]).into_owned();
     let content_length = headers
         .lines()
@@ -209,11 +200,11 @@ fn read_request(stream: &mut TcpStream) -> Result<String> {
         let mut remaining = vec![0u8; content_length - body_len];
         stream
             .read_exact(&mut remaining)
-            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+            .map_err(|err| Error::msg(err.to_string()))?;
         buffer.extend_from_slice(&remaining);
     }
 
-    String::from_utf8(buffer).map_err(|err| anyhow::Error::msg(err.to_string()))
+    String::from_utf8(buffer).map_err(|err| Error::msg(err.to_string()))
 }
 
 fn respond(stream: &mut TcpStream, status: u16, body: &str) -> Result<()> {
@@ -229,35 +220,24 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) -> Result<()> {
     );
     stream
         .write_all(response.as_bytes())
-        .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        .map_err(|err| Error::msg(err.to_string()))?;
     Ok(())
 }
 
-fn parse_namespace(body: &str) -> Option<String> {
-    let value: serde_json_ext::Value = serde_json_ext::from_str(body).ok()?;
-    value
-        .get("namespace")?
-        .as_array()?
-        .first()?
-        .as_str()
-        .map(|value| value.to_string())
-}
-
-fn parse_properties(body: &str) -> Option<BTreeMap<String, String>> {
-    let mut map = BTreeMap::new();
-    let value: serde_json_ext::Value = serde_json_ext::from_str(body).ok()?;
-    let updates = value.get("updates")?.as_object()?;
-    for (key, value) in updates {
-        let value = value.as_str()?.to_string();
-        map.insert(key.clone(), value);
+fn parse_updates(body: &str) -> Option<BTreeMap<String, String>> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let object = value.get("updates")?.as_object()?;
+    let mut updates = BTreeMap::new();
+    for (key, value) in object {
+        updates.insert(key.clone(), value.as_str()?.to_string());
     }
-    Some(map)
+    Some(updates)
 }
 
 fn json_object(map: &BTreeMap<String, String>) -> String {
-    let mut entries = Vec::new();
-    for (key, value) in map {
-        entries.push(format!("\"{}\":\"{}\"", key, value));
-    }
+    let entries = map
+        .iter()
+        .map(|(key, value)| format!("\"{key}\":\"{value}\""))
+        .collect::<Vec<_>>();
     format!("{{{}}}", entries.join(","))
 }

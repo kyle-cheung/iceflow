@@ -20,9 +20,7 @@ fn polaris_sink_rejects_keyed_upsert_for_now() -> Result<()> {
     let err = support::block_on(async { sink.prepare_commit(request).await })
         .expect_err("keyed upsert should be constrained");
 
-    assert!(err
-        .to_string()
-        .contains("append_only"));
+    assert!(err.to_string().contains("append_only"));
     Ok(())
 }
 

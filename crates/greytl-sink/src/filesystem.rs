@@ -62,7 +62,10 @@ impl FilesystemSink {
                 .unwrap_or("bin");
             let staged_path =
                 data_dir.join(format!("{}-{index:04}.{extension}", prepared.snapshot_id));
-            let temp_path = data_dir.join(format!("{}-{index:04}.{extension}.tmp", prepared.snapshot_id));
+            let temp_path = data_dir.join(format!(
+                "{}-{index:04}.{extension}.tmp",
+                prepared.snapshot_id
+            ));
 
             if temp_path.exists() {
                 fs::remove_file(&temp_path).map_err(|err| {
@@ -119,8 +122,10 @@ impl Sink for FilesystemSink {
     async fn commit(&self, prepared: PreparedCommit) -> Result<CommitOutcome> {
         self.ensure_layout()?;
 
-        let commit_path =
-            self.commit_path(&prepared.request.destination_uri, &prepared.request.idempotency_key);
+        let commit_path = self.commit_path(
+            &prepared.request.destination_uri,
+            &prepared.request.idempotency_key,
+        );
         if commit_path.exists() {
             if let Some(meta) = read_snapshot_meta(&self.root, &commit_path)? {
                 return Ok(CommitOutcome {
@@ -220,8 +225,8 @@ fn read_snapshot_file(path: &Path) -> Result<Option<SnapshotMeta>> {
     if !path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(path)
-        .map_err(|err| Error::msg(format!("{}: {err}", path.display())))?;
+    let content =
+        fs::read_to_string(path).map_err(|err| Error::msg(format!("{}: {err}", path.display())))?;
     let mut snapshot_id = None;
     let mut snapshot_uri = None;
     let mut batch_id = None;
@@ -293,9 +298,8 @@ fn replace_staged_file(temp_path: &Path, staged_path: &Path) -> Result<()> {
 #[cfg(windows)]
 fn replace_staged_file(temp_path: &Path, staged_path: &Path) -> Result<()> {
     if staged_path.exists() {
-        fs::remove_file(staged_path).map_err(|err| {
-            Error::msg(format!("remove {} failed: {err}", staged_path.display()))
-        })?;
+        fs::remove_file(staged_path)
+            .map_err(|err| Error::msg(format!("remove {} failed: {err}", staged_path.display())))?;
     }
     fs::rename(temp_path, staged_path).map_err(|err| {
         Error::msg(format!(

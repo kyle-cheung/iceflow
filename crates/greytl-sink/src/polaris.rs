@@ -64,7 +64,10 @@ impl PolarisSink {
     }
 
     fn config_url(&self) -> String {
-        format!("{}/v1/config?warehouse={}", self.catalog_uri, self.warehouse)
+        format!(
+            "{}/v1/config?warehouse={}",
+            self.catalog_uri, self.warehouse
+        )
     }
 
     fn oauth_url(&self) -> String {
@@ -108,8 +111,7 @@ impl PolarisSink {
             let value = format!("Bearer {token}");
             headers.insert(
                 reqwest::header::AUTHORIZATION,
-                reqwest::header::HeaderValue::from_str(&value)
-                    .expect("valid bearer token header"),
+                reqwest::header::HeaderValue::from_str(&value).expect("valid bearer token header"),
             );
         }
         Ok(headers)
@@ -136,7 +138,10 @@ impl PolarisSink {
     }
 
     fn namespace_url(&self, prefix: &str) -> String {
-        format!("{}/v1/{prefix}/namespaces/{}", self.catalog_uri, self.namespace)
+        format!(
+            "{}/v1/{prefix}/namespaces/{}",
+            self.catalog_uri, self.namespace
+        )
     }
 
     fn namespace_properties_url(&self, prefix: &str) -> String {
@@ -156,7 +161,9 @@ impl PolarisSink {
         }
         if response.status().as_u16() != 404 {
             return Err(http_error(
-                response.error_for_status().expect_err("expected non-success status"),
+                response
+                    .error_for_status()
+                    .expect_err("expected non-success status"),
             ));
         }
 
@@ -263,8 +270,10 @@ impl PolarisSink {
                 .unwrap_or("bin");
             let staged_path =
                 data_dir.join(format!("{}-{index:04}.{extension}", prepared.snapshot_id));
-            let temp_path =
-                data_dir.join(format!("{}-{index:04}.{extension}.tmp", prepared.snapshot_id));
+            let temp_path = data_dir.join(format!(
+                "{}-{index:04}.{extension}.tmp",
+                prepared.snapshot_id
+            ));
 
             if temp_path.exists() {
                 fs::remove_file(&temp_path).map_err(|err| {
@@ -383,15 +392,16 @@ fn write_snapshot_meta(path: &Path, meta: &SnapshotMeta) -> Result<()> {
     for file in &meta.committed_files {
         lines.push(format!("file={file}"));
     }
-    fs::write(path, lines.join("\n")).map_err(|err| Error::msg(format!("{}: {err}", path.display())))
+    fs::write(path, lines.join("\n"))
+        .map_err(|err| Error::msg(format!("{}: {err}", path.display())))
 }
 
 fn read_snapshot_file(path: &Path) -> Result<Option<SnapshotMeta>> {
     if !path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(path)
-        .map_err(|err| Error::msg(format!("{}: {err}", path.display())))?;
+    let content =
+        fs::read_to_string(path).map_err(|err| Error::msg(format!("{}: {err}", path.display())))?;
     let mut snapshot_id = None;
     let mut snapshot_uri = None;
     let mut batch_id = None;
@@ -423,7 +433,9 @@ fn read_snapshot_file(path: &Path) -> Result<Option<SnapshotMeta>> {
         snapshot: greytl_state::SnapshotRef {
             uri: snapshot_uri.ok_or_else(|| Error::msg("snapshot_uri missing"))?,
         },
-        batch_id: batch_id.ok_or_else(|| Error::msg("batch_id missing"))?.into(),
+        batch_id: batch_id
+            .ok_or_else(|| Error::msg("batch_id missing"))?
+            .into(),
         destination_uri: destination_uri.ok_or_else(|| Error::msg("destination_uri missing"))?,
         idempotency_key: idempotency_key
             .ok_or_else(|| Error::msg("idempotency_key missing"))?
@@ -457,9 +469,8 @@ fn replace_staged_file(temp_path: &Path, staged_path: &Path) -> Result<()> {
 #[cfg(windows)]
 fn replace_staged_file(temp_path: &Path, staged_path: &Path) -> Result<()> {
     if staged_path.exists() {
-        fs::remove_file(staged_path).map_err(|err| {
-            Error::msg(format!("remove {} failed: {err}", staged_path.display()))
-        })?;
+        fs::remove_file(staged_path)
+            .map_err(|err| Error::msg(format!("remove {} failed: {err}", staged_path.display())))?;
     }
     fs::rename(temp_path, staged_path).map_err(|err| {
         Error::msg(format!(
@@ -527,7 +538,9 @@ impl StoredCommitRecord {
         let prefix = commit_record_prefix(destination_uri, key);
         let snapshot_id = properties.get(&format!("{prefix}.snapshot_id"))?.clone();
         let snapshot_uri = properties.get(&format!("{prefix}.snapshot_uri"))?.clone();
-        let replay_identity = properties.get(&format!("{prefix}.replay_identity"))?.clone();
+        let replay_identity = properties
+            .get(&format!("{prefix}.replay_identity"))?
+            .clone();
 
         Some(Self {
             snapshot_id,
@@ -538,5 +551,8 @@ impl StoredCommitRecord {
 }
 
 fn commit_record_prefix(destination_uri: &str, key: &IdempotencyKey) -> String {
-    format!("{COMMIT_PREFIX}{}", commit_record_key_hash(destination_uri, key))
+    format!(
+        "{COMMIT_PREFIX}{}",
+        commit_record_key_hash(destination_uri, key)
+    )
 }

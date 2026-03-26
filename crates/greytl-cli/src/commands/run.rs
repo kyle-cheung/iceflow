@@ -219,7 +219,9 @@ pub async fn execute(args: Args) -> Result<RunReport> {
             .await?;
 
         if attempt.idempotency_key != idempotency_key.as_str() {
-            return Err(Error::msg("state store idempotency key drifted from CLI expectation"));
+            return Err(Error::msg(
+                "state store idempotency key drifted from CLI expectation",
+            ));
         }
 
         let committed = sink.commit(prepared).await?;
@@ -229,7 +231,10 @@ pub async fn execute(args: Args) -> Result<RunReport> {
         state
             .link_checkpoint_pending(
                 batch_id.clone(),
-                checkpoint_ref(spec.source_id.clone(), manifest.source_checkpoint_end.clone()),
+                checkpoint_ref(
+                    spec.source_id.clone(),
+                    manifest.source_checkpoint_end.clone(),
+                ),
                 StateSnapshotRef {
                     uri: committed.snapshot.uri.clone(),
                 },
@@ -294,7 +299,10 @@ fn build_sink(args: &Args, table_id: &str) -> Result<ConfiguredSink> {
                 .catalog_name
                 .clone()
                 .ok_or_else(|| Error::msg("--catalog is required for --sink polaris"))?;
-            let namespace = args.namespace.clone().unwrap_or_else(|| table_id.to_string());
+            let namespace = args
+                .namespace
+                .clone()
+                .unwrap_or_else(|| table_id.to_string());
             Ok(ConfiguredSink::Polaris(PolarisSink::new(
                 catalog_uri,
                 catalog_name,

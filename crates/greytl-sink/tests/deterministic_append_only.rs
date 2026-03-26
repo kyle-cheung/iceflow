@@ -10,10 +10,10 @@ use greytl_state::{
     checkpoint_ack, checkpoint_ref, AttemptResolution, BatchStatus,
     CommitRequest as StateCommitRequest, SnapshotRef, StateStore, TestStateStore,
 };
-use greytl_worker_duckdb::DuckDbWorker;
 use greytl_types::{
     checkpoint, BatchId, BatchManifest, ManifestFile, Operation, SourceClass, TableId, TableMode,
 };
+use greytl_worker_duckdb::DuckDbWorker;
 use std::collections::BTreeMap;
 
 #[test]
@@ -43,9 +43,13 @@ fn checkpoint_advances_only_after_durable_linkage() -> Result<()> {
             .begin_commit(batch_id.clone(), sample_state_commit_request())
             .await?;
 
-        let prepared = sink.prepare_commit(with_attempt(request, &attempt.idempotency_key.to_string())).await?;
+        let prepared = sink
+            .prepare_commit(with_attempt(request, &attempt.idempotency_key.to_string()))
+            .await?;
         let outcome = sink.commit(prepared).await?;
-        store.resolve_commit(attempt.id.clone(), AttemptResolution::Committed).await?;
+        store
+            .resolve_commit(attempt.id.clone(), AttemptResolution::Committed)
+            .await?;
         store
             .link_checkpoint_pending(
                 batch_id.clone(),
@@ -54,7 +58,10 @@ fn checkpoint_advances_only_after_durable_linkage() -> Result<()> {
             )
             .await?;
 
-        assert_eq!(store.batch_status(batch_id.clone()).await?, BatchStatus::CheckpointPending);
+        assert_eq!(
+            store.batch_status(batch_id.clone()).await?,
+            BatchStatus::CheckpointPending
+        );
 
         store
             .mark_checkpoint_durable(
@@ -63,7 +70,10 @@ fn checkpoint_advances_only_after_durable_linkage() -> Result<()> {
             )
             .await?;
 
-        assert_eq!(store.batch_status(batch_id).await?, BatchStatus::Checkpointed);
+        assert_eq!(
+            store.batch_status(batch_id).await?,
+            BatchStatus::Checkpointed
+        );
         Ok(())
     })
 }
@@ -122,7 +132,11 @@ fn append_only_worker_output_commits_through_filesystem_sink() -> Result<()> {
         for committed_file in &snapshot.committed_files {
             let path = file_uri_path(committed_file);
             assert!(path.starts_with(&destination_path));
-            assert!(path.exists(), "committed data file should exist at {}", path.display());
+            assert!(
+                path.exists(),
+                "committed data file should exist at {}",
+                path.display()
+            );
         }
         Ok(())
     })
@@ -181,7 +195,10 @@ fn lost_ack_append_commit_can_be_resolved_and_checkpointed() -> Result<()> {
             )
             .await?;
 
-        assert_eq!(store.batch_status(batch_id).await?, BatchStatus::Checkpointed);
+        assert_eq!(
+            store.batch_status(batch_id).await?,
+            BatchStatus::Checkpointed
+        );
         Ok(())
     })
 }

@@ -1,9 +1,11 @@
 //! In-process DuckDB worker.
 
+mod compaction;
 mod normalize;
 mod parquet_writer;
 
 use anyhow::Result;
+pub use compaction::{compact_parquet_files, CompactedFiles};
 use greytl_source::SourceBatch;
 pub use normalize::NormalizedBatch;
 pub use parquet_writer::{MaterializedBatch, WriterConfig};

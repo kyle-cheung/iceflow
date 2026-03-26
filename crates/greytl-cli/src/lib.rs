@@ -65,7 +65,11 @@ impl CommandSpec {
 
     pub fn debug_assert(&self) {
         let mut previous = None;
-        let mut names: Vec<_> = self.subcommands.iter().map(|subcommand| subcommand.name).collect();
+        let mut names: Vec<_> = self
+            .subcommands
+            .iter()
+            .map(|subcommand| subcommand.name)
+            .collect();
         names.sort_unstable();
         for name in names {
             if previous == Some(name) {
@@ -90,7 +94,11 @@ pub fn run_env() -> Result<()> {
             commands::run::execute_blocking(args)?;
             Ok(())
         }
-        Commands::Compact(_args) => Err(Error::msg("compact command is not implemented yet")),
+        Commands::Compact(args) => {
+            let report = commands::compact::execute_blocking(args)?;
+            println!("{}", report.to_json());
+            Ok(())
+        }
     }
 }
 
@@ -133,10 +141,10 @@ impl Wake for ThreadWaker {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::task::{Context, Poll};
 
     #[test]
@@ -144,7 +152,9 @@ mod tests {
         let cmd = crate::Cli::command();
         cmd.debug_assert();
 
-        assert!(cmd.get_subcommands().any(|subcommand| subcommand.get_name() == "run"));
+        assert!(cmd
+            .get_subcommands()
+            .any(|subcommand| subcommand.get_name() == "run"));
         assert!(cmd
             .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "compact"));
