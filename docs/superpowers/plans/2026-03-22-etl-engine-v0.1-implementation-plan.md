@@ -829,8 +829,9 @@ Expected: PASS with no matches.
 - [ ] **Step 2: Document RustFS as the current default local backend and record the presigned URL audit finding**
 
 - rename bootstrap helpers and env vars so they refer to `object store` first and provider second
-- replace the default local backend with RustFS behind the generic object-store contract
+- keep RustFS as the current default local backend behind the generic object-store contract
 - require a raw S3 compatibility probe against the same endpoint, bucket, credentials, and path-style settings Polaris uses
+- document that the current Polaris sink path still stages committed data into a local `file://` warehouse, so this gate does not yet prove end-to-end greytl data-file writes through the S3-compatible store
 - document the presigned URL audit finding before treating RustFS as passing the spike
 
 - [ ] **Step 3: Add a provider-swap seam before replacing the default backend**
@@ -850,8 +851,11 @@ Expected: VALID configuration with provider-agnostic docs and scripts.
 Run: `just stack-up`
 Expected: starts Polaris plus the current local S3-compatible backend.
 
+Run: `just test-local-object-store`
+Expected: PASS for the raw S3 compatibility probe against the same endpoint, bucket, credentials, and path-style settings Polaris uses.
+
 Run: `just test-real-stack`
-Expected: PASS for the existing real-stack Polaris smoke suite.
+Expected: PASS for the existing real-stack Polaris smoke suite, which still stages committed data into a local `file://` warehouse.
 
 - [ ] **Step 5: Commit**
 
