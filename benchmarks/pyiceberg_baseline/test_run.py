@@ -427,9 +427,13 @@ def test_benchmark_workload_preserves_original_exception_when_cleanup_fails(
         "benchmarks.pyiceberg_baseline.run.pq.read_schema",
         lambda _: object(),
     )
+
+    def fake_delete_uploaded_files(uploaded_files, stack) -> None:
+        raise RuntimeError("delete files failed")
+
     monkeypatch.setattr(
         "benchmarks.pyiceberg_baseline.run.delete_uploaded_files",
-        lambda uploaded_files, stack: (_ for _ in ()).throw(RuntimeError("delete files failed")),
+        fake_delete_uploaded_files,
     )
 
     caplog.set_level(logging.WARNING)

@@ -109,8 +109,7 @@ def require_env(*names: str) -> str:
         value = os.environ[name]
         if value == "":
             raise ValueError(f"{name} is set but empty")
-        if value is not None:
-            return value
+        return value
     joined = " or ".join(names)
     raise ValueError(f"{joined} must be set in the environment")
 
