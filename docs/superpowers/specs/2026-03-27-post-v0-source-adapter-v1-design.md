@@ -110,23 +110,35 @@ pub struct SourceSpec {
     pub table_id: String,
     pub table_mode: TableMode,
     pub ordering_field: Option<String>,
-    pub capabilities: SourceCapabilities,
+    pub capabilities: BTreeSet<SourceCapability>,
 }
 
-pub struct SourceCapabilities {
-    pub supports_append_only: bool,
-    pub supports_keyed_upsert: bool,
-    pub supports_initial_snapshot: bool,
-    pub supports_change_feed: bool,
-    pub supports_snapshot_handoff: bool,
-    pub supports_deletes: bool,
-    pub supports_before_images: bool,
-    pub supports_resume: bool,
+pub enum SourceCapability {
+    AppendOnly,
+    KeyedUpsert,
+    InitialSnapshot,
+    ChangeFeed,
+    SnapshotHandoff,
+    Deletes,
+    BeforeImages,
+    Resume,
+    DeterministicCheckpoints,
+    StableLatestWinsOrdering,
 }
 
 pub struct SourceHealth {
     pub status: &'static str,
     pub detail: Option<String>,
+}
+
+pub struct DestinationSnapshotRef {
+    pub uri: String,
+}
+
+pub struct CheckpointAck {
+    pub source_id: String,
+    pub checkpoint: CheckpointId,
+    pub destination_snapshot: DestinationSnapshotRef,
 }
 
 pub struct BatchRequest {
@@ -163,7 +175,7 @@ Suggested direction:
 ```rust
 #[allow(async_fn_in_trait)]
 pub trait SourceAdapter {
-    async fn spec(&self) -> SourceSpec;
+    async fn spec(&self) -> Result<SourceSpec>;
     async fn check(&self) -> Result<SourceHealth>;
     async fn poll_batch(&self, req: BatchRequest) -> Result<BatchPoll>;
     async fn checkpoint(&self, ack: CheckpointAck) -> Result<()>;
@@ -173,6 +185,8 @@ pub trait SourceAdapter {
 `discover()` can be retained only if it becomes source-generic operator introspection rather than fixture discovery. It is not required for the core ingestion contract.
 
 `snapshot()` should be retired as the main read verb because it incorrectly implies a one-shot snapshot model for sources that are actually incremental or continuous.
+
+`spec()` should usually be derivable from connector configuration and local state, but returning `Result<SourceSpec>` avoids forcing a trait break later if configuration validation or lazy metadata resolution can fail.
 
 ## 8. Checkpoint And Replay Semantics
 
@@ -195,16 +209,16 @@ The next source contract should expose source capabilities explicitly rather tha
 
 The important capabilities are:
 
-- append-only support
-- keyed-upsert support
-- initial snapshot support
-- ongoing change-feed support
-- snapshot-to-change-feed handoff support
-- delete support
-- before-image support
-- restart and resume support
-- deterministic replayable checkpoints
-- stable per-key ordering sufficient for latest-wins semantics
+- `AppendOnly`
+- `KeyedUpsert`
+- `InitialSnapshot`
+- `ChangeFeed`
+- `SnapshotHandoff`
+- `Deletes`
+- `BeforeImages`
+- `Resume`
+- `DeterministicCheckpoints`
+- `StableLatestWinsOrdering`
 
 This matters because not all connectors should qualify for all table modes.
 
@@ -234,14 +248,14 @@ A future Postgres source should not be accepted based on “it can connect to Po
 
 The real acceptance criteria are:
 
-- a consistent initial snapshot can be produced
-- the CDC start position after the snapshot is deterministic
-- no source changes are missed across the snapshot-to-CDC handoff
-- any replay overlap is deliberate and safe
-- ordering is stable enough for `keyed_upsert`, effectively log position plus intra-transaction sequence
-- restart from the last durable checkpoint is deterministic
-- checkpoint advancement only occurs after destination commit resolution is durable in `greytl-state`
-- crash recovery can resume from control-plane state plus connector checkpoint without manual intervention
+- `P1`: a consistent initial snapshot can be produced
+- `P2`: the CDC start position after the snapshot is deterministic
+- `P3`: no source changes are missed across the snapshot-to-CDC handoff
+- `P4`: any replay overlap is deliberate and safe
+- `P5`: ordering is stable enough for `keyed_upsert`, effectively log position plus intra-transaction sequence
+- `P6`: restart from the last durable checkpoint is deterministic
+- `P7`: checkpoint advancement only occurs after destination commit resolution is durable in `greytl-state`
+- `P8`: crash recovery can resume from control-plane state plus connector checkpoint without manual intervention
 
 The hardest correctness milestone is the snapshot-to-CDC handoff, not the initial database read.
 
@@ -294,6 +308,7 @@ This design intentionally leaves these decisions for later measurement-driven wo
 - whether `LogicalMutation.after` and `before` should move off `serde_json::Value`
 - whether source polling should become streaming internally for performance reasons
 - whether `discover()` remains part of the generic trait
+- whether explicit `start()` and `stop()` lifecycle hooks belong on the shared source trait once the post-v0 execution model is defined
 - whether Postgres snapshot and CDC should live in one connector or two staged implementations
 
 Those questions should be answered after the source contract is generalized and at least one live connector exists to measure against.
