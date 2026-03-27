@@ -1,0 +1,13 @@
+[project]
+name = "greytl-pyiceberg-baseline"
+version = "0.1.0"
+description = "PyIceberg baseline benchmark harness for greytl"
+requires-python = ">=3.9"
+dependencies = [
+    "pyarrow>=18.0.0",
+    "pyiceberg>=0.8.0",
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
