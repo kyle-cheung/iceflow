@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import math
 import os
 import subprocess
 import tempfile
@@ -21,6 +23,7 @@ from benchmarks.pyiceberg_baseline.generate_fixtures import generate_fixtures
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "benchmarks" / "pyiceberg_baseline" / "latest-report.json"
 DEFAULT_DATA_DIR = Path(tempfile.gettempdir()) / "greytl-pyiceberg-baseline" / "landed"
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -99,9 +102,21 @@ def resolve_selected_workloads(requested: Sequence[str] | None) -> list[Workload
     return [REFERENCE_WORKLOADS[name] for name in requested]
 
 
+def require_env(*names: str) -> str:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    joined = " or ".join(names)
+    raise ValueError(f"{joined} must be set in the environment")
+
+
 def resolve_stack_config() -> dict[str, str]:
     polaris_api_port = os.environ.get("POLARIS_API_PORT", "8181")
-    object_store_api_port = os.environ.get("OBJECT_STORE_API_PORT", "9000")
+    object_store_api_port = os.environ.get(
+        "OBJECT_STORE_API_PORT",
+        os.environ.get("MINIO_API_PORT", "9000"),
+    )
     return {
         "catalog_uri": os.environ.get(
             "POLARIS_CATALOG_URI",
@@ -113,17 +128,20 @@ def resolve_stack_config() -> dict[str, str]:
             "POLARIS_CLIENT_ID",
             os.environ.get("POLARIS_ROOT_CLIENT_ID", "root"),
         ),
-        "client_secret": os.environ.get(
-            "POLARIS_CLIENT_SECRET",
-            os.environ.get("POLARIS_ROOT_CLIENT_SECRET", "s3cr3t"),
-        ),
+        "client_secret": require_env("POLARIS_CLIENT_SECRET", "POLARIS_ROOT_CLIENT_SECRET"),
         "object_store_endpoint": os.environ.get(
             "OBJECT_STORE_ENDPOINT",
             f"http://127.0.0.1:{object_store_api_port}",
         ),
-        "object_store_bucket": os.environ.get("OBJECT_STORE_BUCKET", "greytl-warehouse"),
-        "object_store_access_key": os.environ.get("OBJECT_STORE_ACCESS_KEY", "rustfsadmin"),
-        "object_store_secret_key": os.environ.get("OBJECT_STORE_SECRET_KEY", "rustfsadmin"),
+        "object_store_bucket": os.environ.get(
+            "OBJECT_STORE_BUCKET",
+            os.environ.get("MINIO_BUCKET", "greytl-warehouse"),
+        ),
+        "object_store_access_key": require_env("OBJECT_STORE_ACCESS_KEY", "MINIO_ROOT_USER"),
+        "object_store_secret_key": require_env(
+            "OBJECT_STORE_SECRET_KEY",
+            "MINIO_ROOT_PASSWORD",
+        ),
         "object_store_region": os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
     }
 
@@ -171,8 +189,15 @@ def percentile_ms(samples: Sequence[float], percentile: float) -> float:
         return 0.0
     if len(ordered) == 1:
         return round(ordered[0], 3)
-    position = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * percentile))))
-    return round(ordered[position], 3)
+    position = max(0.0, min(len(ordered) - 1, (len(ordered) - 1) * percentile))
+    lower_index = math.floor(position)
+    upper_index = math.ceil(position)
+    if lower_index == upper_index:
+        return round(ordered[lower_index], 3)
+    lower_value = ordered[lower_index]
+    upper_value = ordered[upper_index]
+    interpolated = lower_value + ((upper_value - lower_value) * (position - lower_index))
+    return round(interpolated, 3)
 
 
 def s3_filesystem(stack: dict[str, str]) -> pafs.S3FileSystem:
@@ -209,6 +234,14 @@ def upload_parquet_files(
     return uploaded
 
 
+def delete_uploaded_files(uploaded_files: Sequence[str], stack: dict[str, str]) -> None:
+    filesystem = s3_filesystem(stack)
+    for file_uri in uploaded_files:
+        parsed = urlparse(file_uri)
+        object_path = f"{parsed.netloc}{parsed.path}"
+        filesystem.delete_file(object_path)
+
+
 def namespace_for_workload(workload: WorkloadConfig, stack: dict[str, str]) -> str:
     base_namespace = stack["namespace"]
     if base_namespace == workload.generated_dir_name:
@@ -220,8 +253,8 @@ def table_name_for_workload(workload: WorkloadConfig, run_id: str) -> str:
     return f"pyiceberg_baseline_{workload.generated_dir_name}_{run_id.replace('-', '_')}"
 
 
-def load_polaris_catalog(stack: dict[str, str]):
-    from pyiceberg.catalog import load_catalog
+def load_polaris_catalog(stack: dict[str, str]) -> "Catalog":
+    from pyiceberg.catalog import Catalog, load_catalog
 
     return load_catalog(
         "greytl-pyiceberg-baseline",
@@ -255,39 +288,61 @@ def benchmark_workload(
 
     catalog = load_polaris_catalog(stack)
     namespace = namespace_for_workload(workload, stack)
-    if not catalog.namespace_exists(namespace):
-        catalog.create_namespace(namespace)
-
     table_name = table_name_for_workload(workload, run_id)
     table_identifier = (namespace, table_name)
     table_location = (
         f"s3://{stack['object_store_bucket']}/benchmarks/pyiceberg-baseline/"
         f"{workload.generated_dir_name}/{run_id}/table"
     )
-    table = catalog.create_table(
-        table_identifier,
-        schema=pq.read_schema(parquet_files[0]),
-        location=table_location,
-    )
+    namespace_created = False
+    table_created = False
 
-    commit_latencies_ms: list[float] = []
-    started_at = time.perf_counter()
-    for uploaded_file in uploaded_files:
-        commit_started_at = time.perf_counter()
-        table.add_files([uploaded_file])
-        commit_latencies_ms.append((time.perf_counter() - commit_started_at) * 1000.0)
-    elapsed_seconds = max(time.perf_counter() - started_at, 1e-9)
+    try:
+        if not catalog.namespace_exists(namespace):
+            catalog.create_namespace(namespace)
+            namespace_created = True
 
-    return {
-        "status": "completed",
-        "rows": row_count,
-        "batches": len(uploaded_files),
-        "throughput_rows_per_second": round(row_count / elapsed_seconds, 3),
-        "p95_commit_latency_ms": percentile_ms(commit_latencies_ms, 0.95),
-        "table_identifier": ".".join(table_identifier),
-        "table_location": table_location,
-        "uploaded_files": uploaded_files,
-    }
+        table = catalog.create_table(
+            table_identifier,
+            schema=pq.read_schema(parquet_files[0]),
+            location=table_location,
+        )
+        table_created = True
+
+        commit_latencies_ms: list[float] = []
+        started_at = time.perf_counter()
+        for uploaded_file in uploaded_files:
+            commit_started_at = time.perf_counter()
+            table.add_files([uploaded_file])
+            commit_latencies_ms.append((time.perf_counter() - commit_started_at) * 1000.0)
+        elapsed_seconds = max(time.perf_counter() - started_at, 1e-9)
+
+        return {
+            "status": "completed",
+            "rows": row_count,
+            "batches": len(uploaded_files),
+            "throughput_rows_per_second": round(row_count / elapsed_seconds, 3),
+            "p95_commit_latency_ms": percentile_ms(commit_latencies_ms, 0.95),
+            "table_identifier": ".".join(table_identifier),
+            "table_location": table_location,
+            "uploaded_files": uploaded_files,
+        }
+    except Exception:
+        if table_created:
+            try:
+                catalog.drop_table(table_identifier, purge_requested=True)
+            except Exception:
+                LOGGER.warning("Failed to drop benchmark table %s during cleanup", ".".join(table_identifier))
+        if namespace_created:
+            try:
+                catalog.drop_namespace(namespace)
+            except Exception:
+                LOGGER.warning("Failed to drop benchmark namespace %s during cleanup", namespace)
+        try:
+            delete_uploaded_files(uploaded_files, stack)
+        except Exception:
+            LOGGER.warning("Failed to delete uploaded benchmark files during cleanup")
+        raise
 
 
 def write_report(output_path: Path, report: dict[str, object]) -> None:
@@ -316,6 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             metrics = benchmark_workload(workload, workload_data_dir, stack)
         except Exception as exc:
+            LOGGER.exception("Benchmark workload failed for %s", workload.name)
             exit_code = 1
             workload_reports.append(
                 {

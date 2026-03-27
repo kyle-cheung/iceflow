@@ -1,7 +1,24 @@
+import logging
 import json
 from pathlib import Path
 
-from benchmarks.pyiceberg_baseline.run import REFERENCE_WORKLOADS, main
+import pytest
+
+from benchmarks.pyiceberg_baseline.run import (
+    REFERENCE_WORKLOADS,
+    benchmark_workload,
+    main,
+    percentile_ms,
+    resolve_stack_config,
+)
+
+
+def set_runtime_env(monkeypatch) -> None:
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_ID", "root")
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_SECRET", "catalog-secret")
+    monkeypatch.setenv("OBJECT_STORE_ACCESS_KEY", "object-access")
+    monkeypatch.setenv("OBJECT_STORE_SECRET_KEY", "object-secret")
+    monkeypatch.setenv("OBJECT_STORE_BUCKET", "greytl-warehouse")
 
 
 def test_reference_workloads_are_registered_with_expected_defaults() -> None:
@@ -15,6 +32,7 @@ def test_dry_run_writes_report_with_git_sha_timestamp_and_workload_statuses(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    set_runtime_env(monkeypatch)
     output_path = tmp_path / "report.json"
     monkeypatch.setattr(
         "benchmarks.pyiceberg_baseline.run.resolve_git_sha",
@@ -46,6 +64,7 @@ def test_main_generates_default_fixtures_and_runs_requested_workload(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    set_runtime_env(monkeypatch)
     output_path = tmp_path / "report.json"
     default_data_dir = tmp_path / "auto-landed"
     benchmark_calls: list[tuple[str, Path]] = []
@@ -78,7 +97,6 @@ def test_main_generates_default_fixtures_and_runs_requested_workload(
     monkeypatch.setattr(
         "benchmarks.pyiceberg_baseline.run.benchmark_workload",
         fake_benchmark_workload,
-        raising=False,
     )
 
     exit_code = main(
@@ -104,3 +122,162 @@ def test_main_generates_default_fixtures_and_runs_requested_workload(
     assert workload_report["batches"] == 2
     assert workload_report["throughput_rows_per_second"] == 8.0
     assert workload_report["p95_commit_latency_ms"] == 12.5
+
+
+def test_resolve_stack_config_requires_runtime_secrets(monkeypatch) -> None:
+    monkeypatch.delenv("POLARIS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("POLARIS_ROOT_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("OBJECT_STORE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("OBJECT_STORE_SECRET_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="POLARIS_CLIENT_SECRET"):
+        resolve_stack_config()
+
+
+def test_resolve_stack_config_accepts_legacy_minio_env_names(monkeypatch) -> None:
+    monkeypatch.delenv("OBJECT_STORE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("OBJECT_STORE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("OBJECT_STORE_BUCKET", raising=False)
+    monkeypatch.delenv("OBJECT_STORE_API_PORT", raising=False)
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_SECRET", "catalog-secret")
+    monkeypatch.setenv("MINIO_ROOT_USER", "minio-user")
+    monkeypatch.setenv("MINIO_ROOT_PASSWORD", "minio-password")
+    monkeypatch.setenv("MINIO_BUCKET", "legacy-bucket")
+    monkeypatch.setenv("MINIO_API_PORT", "9000")
+
+    stack = resolve_stack_config()
+
+    assert stack["object_store_access_key"] == "minio-user"
+    assert stack["object_store_secret_key"] == "minio-password"
+    assert stack["object_store_bucket"] == "legacy-bucket"
+    assert stack["object_store_endpoint"] == "http://127.0.0.1:9000"
+
+
+def test_main_logs_traceback_when_workload_fails(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    set_runtime_env(monkeypatch)
+    output_path = tmp_path / "report.json"
+
+    def fake_generate_fixtures(data_dir: Path) -> dict[str, list[Path]]:
+        (data_dir / "orders_events").mkdir(parents=True, exist_ok=True)
+        return {}
+
+    def fake_benchmark_workload(workload, data_dir: Path, stack: dict[str, str]) -> dict[str, object]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.generate_fixtures",
+        fake_generate_fixtures,
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.benchmark_workload",
+        fake_benchmark_workload,
+    )
+
+    caplog.set_level(logging.ERROR)
+    exit_code = main(
+        [
+            "--workload",
+            "append_only.orders_events",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert "Benchmark workload failed for append_only.orders_events" in caplog.text
+    assert "RuntimeError: boom" in caplog.text
+
+
+def test_percentile_ms_interpolates_for_small_samples() -> None:
+    assert percentile_ms([1.0, 10.0], 0.95) == 9.55
+
+
+def test_benchmark_workload_cleans_up_failed_table_and_uploaded_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    deleted_files: list[str] = []
+
+    class FakeFilesystem:
+        def delete_file(self, path: str) -> None:
+            deleted_files.append(path)
+
+    class FakeTable:
+        def add_files(self, file_paths: list[str]) -> None:
+            raise RuntimeError("commit failed")
+
+    class FakeCatalog:
+        def __init__(self) -> None:
+            self.dropped_tables: list[tuple[tuple[str, str], bool]] = []
+            self.dropped_namespaces: list[str] = []
+
+        def namespace_exists(self, namespace: str) -> bool:
+            return False
+
+        def create_namespace(self, namespace: str) -> None:
+            return None
+
+        def create_table(self, identifier, schema, location):
+            return FakeTable()
+
+        def drop_table(self, identifier, purge_requested: bool = False) -> None:
+            self.dropped_tables.append((identifier, purge_requested))
+
+        def drop_namespace(self, namespace: str) -> None:
+            self.dropped_namespaces.append(namespace)
+
+    fake_catalog = FakeCatalog()
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.parquet_files_for_workload",
+        lambda _: [tmp_path / "batch-0001.parquet"],
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.total_rows_for_files",
+        lambda _: 2,
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.upload_parquet_files",
+        lambda files, workload, stack, run_id: ["s3://greytl-warehouse/test-prefix/batch-0001.parquet"],
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.load_polaris_catalog",
+        lambda stack: fake_catalog,
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.s3_filesystem",
+        lambda stack: FakeFilesystem(),
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.pq.read_schema",
+        lambda _: object(),
+    )
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        benchmark_workload(
+            REFERENCE_WORKLOADS["append_only.orders_events"],
+            tmp_path,
+            {
+                "catalog_uri": "http://127.0.0.1:8181/api/catalog",
+                "catalog_name": "quickstart_catalog",
+                "namespace": "orders_events",
+                "client_id": "root",
+                "client_secret": "catalog-secret",
+                "object_store_endpoint": "http://127.0.0.1:9000",
+                "object_store_bucket": "greytl-warehouse",
+                "object_store_access_key": "object-access",
+                "object_store_secret_key": "object-secret",
+                "object_store_region": "us-west-2",
+            },
+        )
+
+    assert len(fake_catalog.dropped_tables) == 1
+    dropped_identifier, purge_requested = fake_catalog.dropped_tables[0]
+    assert dropped_identifier[0] == "orders_events"
+    assert dropped_identifier[1].startswith("pyiceberg_baseline_orders_events_")
+    assert purge_requested is True
+    assert fake_catalog.dropped_namespaces == ["orders_events"]
+    assert deleted_files == ["greytl-warehouse/test-prefix/batch-0001.parquet"]

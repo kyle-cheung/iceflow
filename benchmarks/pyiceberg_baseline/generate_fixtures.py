@@ -30,6 +30,8 @@ def load_jsonl_records(path: Path) -> list[dict[str, Any]]:
 def normalize_value(value: Any) -> Any:
     if isinstance(value, dict):
         if not value:
+            # PyArrow cannot write empty struct values to Parquet, so the
+            # append-only fixture's `{}` sentinel must be normalized first.
             return None
         return {key: normalize_value(child) for key, child in value.items()}
     if isinstance(value, list):
