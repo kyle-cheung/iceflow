@@ -131,6 +131,9 @@ pub struct SourceHealth {
     pub detail: Option<String>,
 }
 
+// Replaces the older generic `SnapshotRef` name in the source SDK with an
+// explicitly destination-oriented name to avoid confusion with source-side
+// snapshot and checkpoint concepts.
 pub struct DestinationSnapshotRef {
     pub uri: String,
 }
@@ -164,6 +167,8 @@ pub struct SourceBatch {
 Important properties:
 
 - `CheckpointId` remains connector-owned and opaque to the engine
+- `DestinationSnapshotRef` is the destination-oriented replacement for the older ambiguous `SnapshotRef` name in the source SDK
+- `CheckpointAck.destination_snapshot` remains required because this ack models post-commit checkpoint advancement after durable destination linkage, not generic source progress heartbeats
 - `batch_label` is diagnostic only, not part of correctness
 - `Idle` and `Exhausted` are distinct so continuous connectors and finite sources can share one contract cleanly
 - `resume_from` does not imply the engine understands the internal structure of the checkpoint token
