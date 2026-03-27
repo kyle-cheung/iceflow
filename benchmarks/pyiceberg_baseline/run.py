@@ -104,8 +104,12 @@ def resolve_selected_workloads(requested: Sequence[str] | None) -> list[Workload
 
 def require_env(*names: str) -> str:
     for name in names:
-        value = os.environ.get(name)
-        if value:
+        if name not in os.environ:
+            continue
+        value = os.environ[name]
+        if value == "":
+            raise ValueError(f"{name} is set but empty")
+        if value is not None:
             return value
     joined = " or ".join(names)
     raise ValueError(f"{joined} must be set in the environment")
@@ -124,10 +128,7 @@ def resolve_stack_config() -> dict[str, str]:
         ),
         "catalog_name": os.environ.get("POLARIS_CATALOG_NAME", "quickstart_catalog"),
         "namespace": os.environ.get("POLARIS_NAMESPACE", "orders_events"),
-        "client_id": os.environ.get(
-            "POLARIS_CLIENT_ID",
-            os.environ.get("POLARIS_ROOT_CLIENT_ID", "root"),
-        ),
+        "client_id": require_env("POLARIS_CLIENT_ID", "POLARIS_ROOT_CLIENT_ID"),
         "client_secret": require_env("POLARIS_CLIENT_SECRET", "POLARIS_ROOT_CLIENT_SECRET"),
         "object_store_endpoint": os.environ.get(
             "OBJECT_STORE_ENDPOINT",
@@ -219,9 +220,9 @@ def upload_parquet_files(
     workload: WorkloadConfig,
     stack: dict[str, str],
     run_id: str,
-) -> list[str]:
+    uploaded_files: list[str],
+) -> None:
     filesystem = s3_filesystem(stack)
-    uploaded: list[str] = []
     prefix = f"benchmarks/pyiceberg-baseline/{workload.generated_dir_name}/{run_id}/data"
     for path in files:
         object_key = f"{prefix}/{path.name}"
@@ -230,8 +231,7 @@ def upload_parquet_files(
             f"{stack['object_store_bucket']}/{object_key}",
             destination_filesystem=filesystem,
         )
-        uploaded.append(f"s3://{stack['object_store_bucket']}/{object_key}")
-    return uploaded
+        uploaded_files.append(f"s3://{stack['object_store_bucket']}/{object_key}")
 
 
 def delete_uploaded_files(uploaded_files: Sequence[str], stack: dict[str, str]) -> None:
@@ -284,9 +284,8 @@ def benchmark_workload(
 
     row_count = total_rows_for_files(parquet_files)
     run_id = uuid.uuid4().hex[:12]
-    uploaded_files = upload_parquet_files(parquet_files, workload, stack, run_id)
-
-    catalog = load_polaris_catalog(stack)
+    uploaded_files: list[str] = []
+    catalog = None
     namespace = namespace_for_workload(workload, stack)
     table_name = table_name_for_workload(workload, run_id)
     table_identifier = (namespace, table_name)
@@ -298,6 +297,8 @@ def benchmark_workload(
     table_created = False
 
     try:
+        upload_parquet_files(parquet_files, workload, stack, run_id, uploaded_files)
+        catalog = load_polaris_catalog(stack)
         if not catalog.namespace_exists(namespace):
             catalog.create_namespace(namespace)
             namespace_created = True
@@ -328,12 +329,12 @@ def benchmark_workload(
             "uploaded_files": uploaded_files,
         }
     except Exception:
-        if table_created:
+        if catalog is not None and table_created:
             try:
                 catalog.drop_table(table_identifier, purge_requested=True)
             except Exception:
                 LOGGER.warning("Failed to drop benchmark table %s during cleanup", ".".join(table_identifier))
-        if namespace_created:
+        if catalog is not None and namespace_created:
             try:
                 catalog.drop_namespace(namespace)
             except Exception:

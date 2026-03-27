@@ -125,6 +125,7 @@ def test_main_generates_default_fixtures_and_runs_requested_workload(
 
 
 def test_resolve_stack_config_requires_runtime_secrets(monkeypatch) -> None:
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_ID", "root")
     monkeypatch.delenv("POLARIS_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("POLARIS_ROOT_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("OBJECT_STORE_ACCESS_KEY", raising=False)
@@ -134,11 +135,23 @@ def test_resolve_stack_config_requires_runtime_secrets(monkeypatch) -> None:
         resolve_stack_config()
 
 
+def test_resolve_stack_config_requires_runtime_client_id(monkeypatch) -> None:
+    monkeypatch.delenv("POLARIS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("POLARIS_ROOT_CLIENT_ID", raising=False)
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_SECRET", "catalog-secret")
+    monkeypatch.setenv("OBJECT_STORE_ACCESS_KEY", "object-access")
+    monkeypatch.setenv("OBJECT_STORE_SECRET_KEY", "object-secret")
+
+    with pytest.raises(ValueError, match="POLARIS_CLIENT_ID"):
+        resolve_stack_config()
+
+
 def test_resolve_stack_config_accepts_legacy_minio_env_names(monkeypatch) -> None:
     monkeypatch.delenv("OBJECT_STORE_ACCESS_KEY", raising=False)
     monkeypatch.delenv("OBJECT_STORE_SECRET_KEY", raising=False)
     monkeypatch.delenv("OBJECT_STORE_BUCKET", raising=False)
     monkeypatch.delenv("OBJECT_STORE_API_PORT", raising=False)
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_ID", "root")
     monkeypatch.setenv("POLARIS_ROOT_CLIENT_SECRET", "catalog-secret")
     monkeypatch.setenv("MINIO_ROOT_USER", "minio-user")
     monkeypatch.setenv("MINIO_ROOT_PASSWORD", "minio-password")
@@ -151,6 +164,39 @@ def test_resolve_stack_config_accepts_legacy_minio_env_names(monkeypatch) -> Non
     assert stack["object_store_secret_key"] == "minio-password"
     assert stack["object_store_bucket"] == "legacy-bucket"
     assert stack["object_store_endpoint"] == "http://127.0.0.1:9000"
+
+
+def test_resolve_stack_config_requires_object_store_access_key(monkeypatch) -> None:
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_ID", "root")
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_SECRET", "catalog-secret")
+    monkeypatch.delenv("OBJECT_STORE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("MINIO_ROOT_USER", raising=False)
+    monkeypatch.setenv("OBJECT_STORE_SECRET_KEY", "object-secret")
+
+    with pytest.raises(ValueError, match="OBJECT_STORE_ACCESS_KEY"):
+        resolve_stack_config()
+
+
+def test_resolve_stack_config_requires_object_store_secret_key(monkeypatch) -> None:
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_ID", "root")
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_SECRET", "catalog-secret")
+    monkeypatch.setenv("OBJECT_STORE_ACCESS_KEY", "object-access")
+    monkeypatch.delenv("OBJECT_STORE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("MINIO_ROOT_PASSWORD", raising=False)
+
+    with pytest.raises(ValueError, match="OBJECT_STORE_SECRET_KEY"):
+        resolve_stack_config()
+
+
+def test_resolve_stack_config_rejects_empty_primary_client_id(monkeypatch) -> None:
+    monkeypatch.setenv("POLARIS_CLIENT_ID", "")
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_ID", "fallback-root")
+    monkeypatch.setenv("POLARIS_ROOT_CLIENT_SECRET", "catalog-secret")
+    monkeypatch.setenv("OBJECT_STORE_ACCESS_KEY", "object-access")
+    monkeypatch.setenv("OBJECT_STORE_SECRET_KEY", "object-secret")
+
+    with pytest.raises(ValueError, match="POLARIS_CLIENT_ID is set but empty"):
+        resolve_stack_config()
 
 
 def test_main_logs_traceback_when_workload_fails(
@@ -241,7 +287,9 @@ def test_benchmark_workload_cleans_up_failed_table_and_uploaded_files(
     )
     monkeypatch.setattr(
         "benchmarks.pyiceberg_baseline.run.upload_parquet_files",
-        lambda files, workload, stack, run_id: ["s3://greytl-warehouse/test-prefix/batch-0001.parquet"],
+        lambda files, workload, stack, run_id, uploaded_files: uploaded_files.append(
+            "s3://greytl-warehouse/test-prefix/batch-0001.parquet"
+        ),
     )
     monkeypatch.setattr(
         "benchmarks.pyiceberg_baseline.run.load_polaris_catalog",
@@ -281,3 +329,128 @@ def test_benchmark_workload_cleans_up_failed_table_and_uploaded_files(
     assert purge_requested is True
     assert fake_catalog.dropped_namespaces == ["orders_events"]
     assert deleted_files == ["greytl-warehouse/test-prefix/batch-0001.parquet"]
+
+
+def test_benchmark_workload_cleans_up_partially_uploaded_files_when_upload_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    deleted_files: list[str] = []
+
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.parquet_files_for_workload",
+        lambda _: [tmp_path / "batch-0001.parquet"],
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.total_rows_for_files",
+        lambda _: 2,
+    )
+
+    def fake_upload_parquet_files(files, workload, stack, run_id, uploaded_files: list[str]) -> None:
+        uploaded_files.append("s3://greytl-warehouse/test-prefix/batch-0001.parquet")
+        raise RuntimeError("upload failed")
+
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.upload_parquet_files",
+        fake_upload_parquet_files,
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.delete_uploaded_files",
+        lambda uploaded_files, stack: deleted_files.extend(uploaded_files),
+    )
+
+    with pytest.raises(RuntimeError, match="upload failed"):
+        benchmark_workload(
+            REFERENCE_WORKLOADS["append_only.orders_events"],
+            tmp_path,
+            {
+                "catalog_uri": "http://127.0.0.1:8181/api/catalog",
+                "catalog_name": "quickstart_catalog",
+                "namespace": "orders_events",
+                "client_id": "root",
+                "client_secret": "catalog-secret",
+                "object_store_endpoint": "http://127.0.0.1:9000",
+                "object_store_bucket": "greytl-warehouse",
+                "object_store_access_key": "object-access",
+                "object_store_secret_key": "object-secret",
+                "object_store_region": "us-west-2",
+            },
+        )
+
+    assert deleted_files == ["s3://greytl-warehouse/test-prefix/batch-0001.parquet"]
+
+
+def test_benchmark_workload_preserves_original_exception_when_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    class FakeTable:
+        def add_files(self, file_paths: list[str]) -> None:
+            raise RuntimeError("commit failed")
+
+    class FakeCatalog:
+        def namespace_exists(self, namespace: str) -> bool:
+            return False
+
+        def create_namespace(self, namespace: str) -> None:
+            return None
+
+        def create_table(self, identifier, schema, location):
+            return FakeTable()
+
+        def drop_table(self, identifier, purge_requested: bool = False) -> None:
+            raise RuntimeError("drop table failed")
+
+        def drop_namespace(self, namespace: str) -> None:
+            raise RuntimeError("drop namespace failed")
+
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.parquet_files_for_workload",
+        lambda _: [tmp_path / "batch-0001.parquet"],
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.total_rows_for_files",
+        lambda _: 2,
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.upload_parquet_files",
+        lambda files, workload, stack, run_id, uploaded_files: uploaded_files.append(
+            "s3://greytl-warehouse/test-prefix/batch-0001.parquet"
+        ),
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.load_polaris_catalog",
+        lambda stack: FakeCatalog(),
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.pq.read_schema",
+        lambda _: object(),
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.delete_uploaded_files",
+        lambda uploaded_files, stack: (_ for _ in ()).throw(RuntimeError("delete files failed")),
+    )
+
+    caplog.set_level(logging.WARNING)
+    with pytest.raises(RuntimeError, match="commit failed"):
+        benchmark_workload(
+            REFERENCE_WORKLOADS["append_only.orders_events"],
+            tmp_path,
+            {
+                "catalog_uri": "http://127.0.0.1:8181/api/catalog",
+                "catalog_name": "quickstart_catalog",
+                "namespace": "orders_events",
+                "client_id": "root",
+                "client_secret": "catalog-secret",
+                "object_store_endpoint": "http://127.0.0.1:9000",
+                "object_store_bucket": "greytl-warehouse",
+                "object_store_access_key": "object-access",
+                "object_store_secret_key": "object-secret",
+                "object_store_region": "us-west-2",
+            },
+        )
+
+    assert "Failed to drop benchmark table" in caplog.text
+    assert "Failed to drop benchmark namespace" in caplog.text
+    assert "Failed to delete uploaded benchmark files during cleanup" in caplog.text
