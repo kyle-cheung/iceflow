@@ -1,7 +1,7 @@
 # Post-v0 Source Adapter v1 Design
 
 Date: 2026-03-27
-Status: Draft for review
+Status: Accepted
 
 ## 1. Purpose
 
