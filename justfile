@@ -28,3 +28,7 @@ test-real-stack:
 test-compact:
     cargo test -p greytl-worker-duckdb compact_parquet_files_merges_small_inputs_into_one_output
     cargo test -p greytl-cli --test compact
+
+benchmark-baseline *args:
+    test -f infra/local/.env || cp infra/local/.env.example infra/local/.env
+    set -a; . infra/local/.env; set +a; uv run --project benchmarks/pyiceberg_baseline python -m benchmarks.pyiceberg_baseline.run {{args}}
