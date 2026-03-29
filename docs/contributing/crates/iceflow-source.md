@@ -16,8 +16,11 @@
 
 - `crates/iceflow-source/src/adapter.rs`
 - `crates/iceflow-source/src/file_source.rs`
-- `crates/iceflow-cli/src/commands/run.rs`
 - `crates/iceflow-source/tests/source_adapter.rs`
+
+### Related Crates
+
+- `crates/iceflow-cli/src/commands/run.rs` — CLI wiring that exercises the source adapter
 - `fixtures/reference_workload_v0/`
 
 ## Change Here When

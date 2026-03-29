@@ -17,7 +17,10 @@
 - `crates/iceflow-worker-duckdb/src/normalize.rs`
 - `crates/iceflow-worker-duckdb/src/parquet_writer.rs`
 - `crates/iceflow-worker-duckdb/src/compaction.rs`
-- `crates/iceflow-cli/tests/compact.rs`
+
+### Related Crates
+
+- `crates/iceflow-cli/tests/compact.rs` — CLI-level compaction integration test
 
 ## Change Here When
 

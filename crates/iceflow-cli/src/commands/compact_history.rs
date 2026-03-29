@@ -175,7 +175,7 @@ mod tests {
             .join("iceflow-cli-compact-history-tests")
             .join("replay");
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("_iceflow_snapshots"))
+        fs::create_dir_all(root.join("_greytl_snapshots"))
             .map_err(|err| Error::msg(err.to_string()))?;
         fs::create_dir_all(root.join("data")).map_err(|err| Error::msg(err.to_string()))?;
         fs::create_dir_all(root.join("compaction")).map_err(|err| Error::msg(err.to_string()))?;
@@ -188,9 +188,9 @@ mod tests {
         fs::write(&file_c, b"cccccc").map_err(|err| Error::msg(err.to_string()))?;
 
         fs::write(
-            root.join("_iceflow_snapshots/snapshot-0001.txt"),
+            root.join("_greytl_snapshots/snapshot-0001.txt"),
             format!(
-                "snapshot_id=snapshot-0001\nsnapshot_uri=file://{}/_iceflow_snapshots/snapshot-0001.txt\nbatch_id=batch-0001\ndestination_uri=file://{}\nidempotency_key=batch-0001:append\nrecord_count=2\nfile=file://{}\nfile=file://{}",
+                "snapshot_id=snapshot-0001\nsnapshot_uri=file://{}/_greytl_snapshots/snapshot-0001.txt\nbatch_id=batch-0001\ndestination_uri=file://{}\nidempotency_key=batch-0001:append\nrecord_count=2\nfile=file://{}\nfile=file://{}",
                 root.display(),
                 root.display(),
                 file_a.display(),
@@ -217,7 +217,7 @@ mod tests {
         fs::remove_file(&file_a).map_err(|err| Error::msg(err.to_string()))?;
 
         let active = rebuild_active_files(
-            load_base_snapshot_files(&root.join("_iceflow_snapshots"))?,
+            load_base_snapshot_files(&root.join("_greytl_snapshots"))?,
             &load_compaction_records(&root.join("compaction"))?,
         )?;
 

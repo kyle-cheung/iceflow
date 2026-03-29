@@ -26,7 +26,7 @@ Out of scope for Task 9:
 
 ## Current Constraint
 
-The current Polaris path is not yet a real Iceberg table integration. `PolarisSink` performs Polaris config and namespace operations and records iceflow-local commit state, but it does not create or mutate Iceberg table metadata that a real `LoadTable` call could read. Task 9 therefore compacts against the current iceflow-local snapshot model and documents that `CompactReport.snapshot_id` is a iceflow-local concept for now.
+The current Polaris path is not yet a real Iceberg table integration. `PolarisSink` performs Polaris config and namespace operations and records iceflow-local commit state, but it does not create or mutate Iceberg table metadata that a real `LoadTable` call could read. Task 9 therefore compacts against the current iceflow-local snapshot model and documents that `CompactReport.snapshot_id` is an iceflow-local concept for now.
 
 The full Polaris/Iceberg upgrade is a follow-on task:
 
@@ -126,7 +126,7 @@ Compaction records live at:
 Rules:
 
 - `seq` is a zero-padded monotonic integer derived by scanning existing compaction records
-- `snapshot_id` is a iceflow-local compaction snapshot id
+- `snapshot_id` is an iceflow-local compaction snapshot id
 - records are replayed in lexical filename order
 
 Record payload fields:
