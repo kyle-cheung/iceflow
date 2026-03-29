@@ -1,32 +1,38 @@
 # Post-v0 Source Adapter v1 Design
 
 Date: 2026-03-27
+Last updated: 2026-03-28
 Status: Accepted
 
 ## 1. Purpose
 
 This document defines the post-v0 direction for widening `greytl` from a deterministic file-backed reference source to a general source SDK that can support real database CDC and other source classes without forcing changes into the worker, state-store, runtime, or sink cores.
 
-The immediate goal is not to implement a Postgres connector next. The goal is to pin the architectural contract that future source work should follow once Task 10 and the remaining v0 closeout work are complete.
+The immediate goal is not to implement a Postgres connector next. The goal is to pin the architectural contract that future source work should follow now that Task 10 and the narrowed v0 closeout work are complete.
 
-## 2. Why This Is Not The Immediate Next Task
+## 2. Why This Is Not A Live Connector Task Yet
 
 This design is intentionally post-v0.
 
-Before executing this work, the project should first complete:
+The repo has now completed the gating work that originally blocked this design from becoming actionable:
 
 - Task 10 benchmarking and baseline work from the v0 implementation plan
-- final v0 verification and closeout
-- the remaining branch-wide cleanup and validation work needed to declare the narrowed v0 slice complete
+- final v0 verification and closeout for the narrowed write-path slice
+- branch-wide cleanup needed to restore the strict reviewer and validation gates
 
-There are also runtime-product gaps between the current repo and a real live-source rollout:
+That means steps 1 and 2 in the sequencing section are now valid to start:
+
+- generalize the shared source contract
+- port `FileSource` onto that contract without changing behavior
+
+What is still not true is that the repo is ready for a live database connector rollout. There are still runtime-product gaps between the current repo and a real live-source execution model:
 
 - the current CLI `run` path is workload-driven and finite, not a long-running connector service
 - the current SQLite state store is created under a temp path per invocation, not a configured long-lived control-plane database
 - the current CLI contract selects built-in workloads, not connector configuration
 - real connector operations will require connector-specific auth, configuration, and operator-facing observability that v0 does not yet expose
 
-This spec therefore defines the target contract and sequencing constraints for post-v0 source work. It does not claim the repo is ready to start Postgres CDC immediately after Task 10.
+This spec therefore defines the target contract and sequencing constraints for post-v0 source work. It does not claim the repo is ready to start Postgres snapshot ingestion or Postgres CDC immediately after the source-contract refactor begins.
 
 ## 3. Current State
 
@@ -275,20 +281,21 @@ Recommended sequence:
 
 This order is intentionally conservative.
 
+Steps 1 and 2 are now valid to execute against the current repo.
+
 Step 3 proves connector mechanics and configuration boundaries.
 Step 4 proves mutable-source correctness.
 
-## 13. Post-v0 Prerequisites Before Implementation
+## 13. Post-v0 Prerequisites Before Live Connector Implementation
 
-Before starting step 1, the project should explicitly decide how the following gaps will be handled:
+Before starting step 3, the project should explicitly decide how the following gaps will be handled:
 
-- finish Task 10 and declare the narrowed v0 scope complete
 - promote the SQLite control plane from per-run temp-path behavior to a configured persistent store for real connector runs
 - define a connector configuration surface for CLI or service execution
 - decide whether live-source execution remains a CLI-run process or becomes a long-running service
 - define operator-visible health and progress reporting for live connectors
 
-These are not arguments against the source-contract refactor. They are preconditions for executing it safely after v0.
+These are not arguments against the source-contract refactor. They are prerequisites for executing the first real live connector safely after the source boundary has been generalized.
 
 ## 14. Verification Expectations For The Refactor
 
