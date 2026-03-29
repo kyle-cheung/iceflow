@@ -7,19 +7,19 @@ Start in `AGENTS.md` when you need to orient yourself quickly. Use the files in 
 ## How To Use These Guides
 
 1. Read `AGENTS.md` first for repo-wide rules, quick commands, and routing.
-2. Open the relevant crate guide in `docs/contributing/crates/`.
+2. Open the relevant crate guide in `docs/contributing/crates/`, or use `## Non-Crate Surfaces` below if you are changing fixtures, local stack wiring, or the root docs.
 3. Run the targeted crate tests before widening verification.
 4. Update the matching guide if your change materially shifts ownership, entrypoints, or test expectations.
 
 ## Main Crates
 
-- `crates/greytl-types`: shared domain vocabulary, manifest types, mutation modeling, and reference workload contracts.
+- `crates/greytl-types`: shared domain vocabulary, manifest types, mutation modeling, and static reference workload metadata.
 - `crates/greytl-source`: source adapter boundary plus the deterministic file-backed reference source.
 - `crates/greytl-worker-duckdb`: normalization, Parquet materialization, and offline compaction helpers.
-- `crates/greytl-state`: SQLite-backed control plane, migrations, reconciliation, and recovery state transitions.
-- `crates/greytl-sink`: sink protocol plus filesystem, Polaris, and test-double implementations.
+- `crates/greytl-state`: SQLite-backed control plane, migrations, persisted batch/attempt/checkpoint state, and recovery/orphan bookkeeping.
+- `crates/greytl-sink`: sink protocol plus append-only filesystem/Polaris implementations and test-double coverage.
 - `crates/greytl-runtime`: local intake/backpressure and checkpoint gating.
-- `crates/greytl-cli`: operator-facing command wiring for `run` and `compact`.
+- `crates/greytl-cli`: operator-facing command wiring for `run` and append-only `compact`.
 
 ## Crate Guides
 
