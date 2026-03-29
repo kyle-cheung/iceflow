@@ -31,4 +31,10 @@ test-compact:
 
 benchmark-baseline *args:
     test -f infra/local/.env || cp infra/local/.env.example infra/local/.env
-    set -a; . infra/local/.env; set +a; uv run --project benchmarks/pyiceberg_baseline python -m benchmarks.pyiceberg_baseline.run {{args}}
+    set -a; . infra/local/.env; set +a; \
+      OBJECT_STORE_API_PORT="${OBJECT_STORE_API_PORT:-${MINIO_API_PORT:-9000}}" \
+      OBJECT_STORE_ENDPOINT="${OBJECT_STORE_ENDPOINT:-http://127.0.0.1:${OBJECT_STORE_API_PORT:-${MINIO_API_PORT:-9000}}}" \
+      OBJECT_STORE_ACCESS_KEY="${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}" \
+      OBJECT_STORE_SECRET_KEY="${OBJECT_STORE_SECRET_KEY:-rustfsadmin}" \
+      OBJECT_STORE_BUCKET="${OBJECT_STORE_BUCKET:-${MINIO_BUCKET:-greytl-warehouse}}" \
+      uv run --project benchmarks/pyiceberg_baseline python -m benchmarks.pyiceberg_baseline.run {{args}}

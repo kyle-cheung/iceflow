@@ -32,6 +32,16 @@ source adapter → Arrow batch → normalize/write worker → Parquet batch + ma
 | `greytl-runtime` | Pipeline coordinator, backpressure, single-writer-per-table execution |
 | `greytl-cli` | CLI for running pipelines and offline compaction |
 
+### Repo Layout
+
+| Path | Purpose |
+|---|---|
+| `crates/` | Rust implementation split by domain: types, state, source, worker, sink, runtime, and CLI |
+| `fixtures/reference_workload_v0/` | Canonical JSONL reference workloads used by the file source and benchmark fixture generation |
+| `infra/local/` | Local Polaris plus S3-compatible stack, `.env` template, and bootstrap scripts |
+| `benchmarks/` | Benchmark harnesses and benchmark-specific documentation |
+| `docs/` | Session briefs plus deferred follow-up notes that are intentionally kept out of the root README |
+
 ## Table Modes
 
 **`append_only`** — Insert-only ingestion for logs, snapshots, and file drops. Each committed batch is applied at most once; replay converges on the same batch identity.
@@ -64,6 +74,8 @@ Worker crashes don't make commit outcomes unknowable. The recovery state machine
 
 - Rust (see `rust-toolchain.toml` for pinned version)
 - [Just](https://github.com/casey/just) command runner
+- Docker Compose for the local Polaris/object-store stack
+- [`uv`](https://docs.astral.sh/uv/) for the Python baseline benchmark harness
 
 ### Build
 
@@ -77,33 +89,79 @@ cargo build
 # Fast unit tests (Tier 0)
 just test-fast
 
-# Deterministic integration tests (Tier 1)
-just test-deterministic
+# Local Polaris bootstrap + S3-compatible object-store probe
+just test-local-object-store
 
-# Real-stack tests against Polaris + a local S3-compatible object store (Tier 2)
-just test-real
+# Real-stack sink tests against Polaris + the local stack
+just test-real-stack
+
+# Offline compaction tests
+just test-compact
 ```
 
 ### Run
 
 ```sh
-# Run the reference pipeline against file fixtures
-cargo run -p greytl-cli -- run --fixtures fixtures/reference_workload_v0/
+# Run the append-only reference workload to a local filesystem destination
+cargo run -p greytl-cli -- run \
+  --workload append_only.orders_events \
+  --destination-uri file:///tmp/greytl-demo \
+  --sink filesystem
 
 # Offline compaction
-cargo run -p greytl-cli -- compact --warehouse <path>
+cargo run -p greytl-cli -- compact \
+  --warehouse-uri file:///tmp/greytl-demo \
+  --catalog-uri http://127.0.0.1:8181/api/catalog \
+  --catalog demo \
+  --namespace orders_events \
+  --table orders \
+  --table-mode append_only \
+  --min-small-file-bytes 1048576 \
+  --max-rewrite-files 8
 ```
+
+Current reference workloads:
+
+- `append_only.orders_events`
+- `keyed_upsert.customer_state`
+
+The `run` command defaults to the filesystem sink. Use `--sink polaris` with `--catalog-uri`, `--catalog`, and `--namespace` when targeting the local or real Polaris catalog.
 
 ### Local Stack
 
 ```sh
-# Start Polaris + the local S3-compatible object store for real-stack testing
-docker compose -f infra/local/docker-compose.yml up -d
+# Validate the local stack config
+just stack-config
+
+# Start Polaris + the local S3-compatible object store
+just stack-up
+
+# Tear it down
+just stack-down
 ```
 
-Current `infra/local` uses RustFS as the current default local S3-compatible backend. That choice is local-stack scaffolding, not a core runtime dependency. Task 8b validates the local object-store contract through Polaris bootstrap plus a raw S3 path-style probe; it does not yet prove end-to-end greytl data-file writes through that S3-compatible store because the current Polaris sink path still stages committed files into a local `file://` warehouse. Production guidance remains direct cloud object storage, especially AWS S3.
+`infra/local/.env.example` is the source template for local runs. The `just` recipes copy it to `infra/local/.env` if needed and export the Polaris/object-store settings expected by the Rust tests and Python benchmark harness.
 
-Task 8b audited `crates/greytl-sink/src/polaris.rs` and `infra/local/polaris-bootstrap.sh` and found no presigned URL usage in the current Polaris local-stack path, so the RustFS compatibility gate excludes presigned URL verification for this task.
+Current `infra/local` uses RustFS as the default local S3-compatible backend. That is local-stack scaffolding, not a core runtime dependency. The local object-store probe validates Polaris bootstrap plus raw path-style access, but the current Polaris sink path still stages committed files into a local `file://` warehouse rather than proving end-to-end greytl data-file writes through that S3-compatible store. Production guidance remains direct cloud object storage, especially AWS S3. The current local-stack path does not rely on presigned URLs.
+
+### Benchmarks
+
+`benchmarks/README.md` documents the current baseline harnesses. The active v0 benchmark is the `G1` PyIceberg write-path baseline in `benchmarks/pyiceberg_baseline/`.
+
+```sh
+# Resolve workloads, stack settings, and output paths without mutating the stack
+just benchmark-baseline --dry-run
+
+# Run the active append-only baseline
+just benchmark-baseline --workload append_only.orders_events
+```
+
+The first pass enables `append_only.orders_events` and keeps `keyed_upsert.customer_state` scaffolded but skipped until the engine sink path supports that mode.
+
+### Known Follow-Ups
+
+- `docs/task9-offline-compaction-followups.md`
+- `docs/task10-benchmark-followups.md`
 
 ## V0 Scope
 

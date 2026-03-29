@@ -9,7 +9,7 @@ use greytl_types::{
 };
 use std::collections::BTreeMap;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use support::polaris_mock::MockPolarisServer;
 
 #[test]
@@ -136,7 +136,7 @@ fn real_stack_append_only_commit_round_trips_against_polaris() -> Result<()> {
     })
 }
 
-fn sample_append_commit_request(root: &PathBuf) -> CommitRequest {
+fn sample_append_commit_request(root: &Path) -> CommitRequest {
     CommitRequest {
         batch_id: BatchId::from("batch-append-0001"),
         destination_uri: format!("file://{}", root.join("warehouse/orders_events").display()),

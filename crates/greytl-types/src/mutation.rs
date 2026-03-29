@@ -172,6 +172,7 @@ pub struct LogicalMutationBuilder {
 }
 
 impl LogicalMutationBuilder {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         table_id: TableId,
         source_id: impl Into<String>,
@@ -244,6 +245,7 @@ impl LogicalMutationBuilder {
 }
 
 impl LogicalMutation {
+    #[allow(clippy::too_many_arguments)]
     pub fn builder(
         table_id: TableId,
         source_id: impl Into<String>,
@@ -272,6 +274,7 @@ impl LogicalMutation {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         table_id: TableId,
         source_id: impl Into<String>,
@@ -299,6 +302,7 @@ impl LogicalMutation {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert(
         table_id: TableId,
         source_id: impl Into<String>,
@@ -326,6 +330,7 @@ impl LogicalMutation {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn delete(
         table_id: TableId,
         source_id: impl Into<String>,
