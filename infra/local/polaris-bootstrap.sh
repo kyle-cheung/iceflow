@@ -34,7 +34,8 @@ PAYLOAD="$(cat <<EOF
       "allowedLocations": ["s3://${OBJECT_STORE_BUCKET}"],
       "endpoint": "http://localhost:${OBJECT_STORE_API_PORT}",
       "endpointInternal": "http://object-store:9000",
-      "pathStyleAccess": true
+      "pathStyleAccess": true,
+      "stsUnavailable": true
     }
   }
 }

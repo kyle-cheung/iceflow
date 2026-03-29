@@ -23,9 +23,20 @@ jobs:
 
   real-stack:
     runs-on: ubuntu-latest
+    env:
+      OBJECT_STORE_IMAGE: ${{ vars.OBJECT_STORE_IMAGE }}
+      OBJECT_STORE_AWS_CLI_IMAGE: ${{ vars.OBJECT_STORE_AWS_CLI_IMAGE }}
+      POLARIS_IMAGE: ${{ vars.POLARIS_IMAGE }}
+      POLARIS_BOOTSTRAP_IMAGE: ${{ vars.POLARIS_BOOTSTRAP_IMAGE }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Prepare local stack env
         run: cp infra/local/.env.example infra/local/.env
       - name: Validate compose config

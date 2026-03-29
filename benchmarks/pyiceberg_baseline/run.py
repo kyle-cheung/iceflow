@@ -263,11 +263,13 @@ def load_polaris_catalog(stack: dict[str, str]) -> "Catalog":
         credential=f"{stack['client_id']}:{stack['client_secret']}",
         scope="PRINCIPAL_ROLE:ALL",
         **{
+            "header.X-Iceberg-Access-Delegation": "",
             "py-io-impl": "pyiceberg.io.pyarrow.PyArrowFileIO",
             "s3.endpoint": stack["object_store_endpoint"],
             "s3.access-key-id": stack["object_store_access_key"],
             "s3.secret-access-key": stack["object_store_secret_key"],
             "s3.region": stack["object_store_region"],
+            "s3.force-virtual-addressing": "false",
         },
     )
 
@@ -288,10 +290,6 @@ def benchmark_workload(
     namespace = namespace_for_workload(workload, stack)
     table_name = table_name_for_workload(workload, run_id)
     table_identifier = (namespace, table_name)
-    table_location = (
-        f"s3://{stack['object_store_bucket']}/benchmarks/pyiceberg-baseline/"
-        f"{workload.generated_dir_name}/{run_id}/table"
-    )
     namespace_created = False
     table_created = False
 
@@ -305,7 +303,6 @@ def benchmark_workload(
         table = catalog.create_table(
             table_identifier,
             schema=pq.read_schema(parquet_files[0]),
-            location=table_location,
         )
         table_created = True
 
@@ -324,7 +321,7 @@ def benchmark_workload(
             "throughput_rows_per_second": round(row_count / elapsed_seconds, 3),
             "p95_commit_latency_ms": percentile_ms(commit_latencies_ms, 0.95),
             "table_identifier": ".".join(table_identifier),
-            "table_location": table_location,
+            "table_location": table.location(),
             "uploaded_files": uploaded_files,
         }
     except Exception:

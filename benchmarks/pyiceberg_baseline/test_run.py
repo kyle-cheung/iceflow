@@ -242,6 +242,43 @@ def test_percentile_ms_interpolates_for_small_samples() -> None:
     assert percentile_ms([1.0, 10.0], 0.95) == 9.55
 
 
+def test_load_polaris_catalog_disables_access_delegation_and_forces_path_style(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_load_catalog(name: str, **properties: str) -> object:
+        captured["name"] = name
+        captured["properties"] = properties
+        return object()
+
+    import pyiceberg.catalog
+
+    monkeypatch.setattr(pyiceberg.catalog, "load_catalog", fake_load_catalog)
+
+    from benchmarks.pyiceberg_baseline.run import load_polaris_catalog
+
+    load_polaris_catalog(
+        {
+            "catalog_uri": "http://127.0.0.1:8181/api/catalog",
+            "catalog_name": "quickstart_catalog",
+            "namespace": "orders_events",
+            "client_id": "root",
+            "client_secret": "catalog-secret",
+            "object_store_endpoint": "http://127.0.0.1:9000",
+            "object_store_bucket": "greytl-warehouse",
+            "object_store_access_key": "object-access",
+            "object_store_secret_key": "object-secret",
+            "object_store_region": "us-west-2",
+        }
+    )
+
+    assert captured["name"] == "greytl-pyiceberg-baseline"
+    properties = captured["properties"]
+    assert properties["header.X-Iceberg-Access-Delegation"] == ""
+    assert properties["s3.force-virtual-addressing"] == "false"
+
+
 def test_benchmark_workload_cleans_up_failed_table_and_uploaded_files(
     tmp_path: Path,
     monkeypatch,
@@ -267,7 +304,7 @@ def test_benchmark_workload_cleans_up_failed_table_and_uploaded_files(
         def create_namespace(self, namespace: str) -> None:
             return None
 
-        def create_table(self, identifier, schema, location):
+        def create_table(self, identifier, schema, **kwargs):
             return FakeTable()
 
         def drop_table(self, identifier, purge_requested: bool = False) -> None:
@@ -396,7 +433,7 @@ def test_benchmark_workload_preserves_original_exception_when_cleanup_fails(
         def create_namespace(self, namespace: str) -> None:
             return None
 
-        def create_table(self, identifier, schema, location):
+        def create_table(self, identifier, schema, **kwargs):
             return FakeTable()
 
         def drop_table(self, identifier, purge_requested: bool = False) -> None:
@@ -458,3 +495,72 @@ def test_benchmark_workload_preserves_original_exception_when_cleanup_fails(
     assert "Failed to drop benchmark table" in caplog.text
     assert "Failed to drop benchmark namespace" in caplog.text
     assert "Failed to delete uploaded benchmark files during cleanup" in caplog.text
+
+
+def test_benchmark_workload_uses_catalog_assigned_table_location(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    create_table_calls: list[tuple[tuple[str, str], object, dict[str, object]]] = []
+
+    class FakeTable:
+        def add_files(self, file_paths: list[str]) -> None:
+            return None
+
+        def location(self) -> str:
+            return "s3://greytl-warehouse/orders_events/managed-table"
+
+    class FakeCatalog:
+        def namespace_exists(self, namespace: str) -> bool:
+            return True
+
+        def create_table(self, identifier, schema, **kwargs):
+            create_table_calls.append((identifier, schema, kwargs))
+            return FakeTable()
+
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.parquet_files_for_workload",
+        lambda _: [tmp_path / "batch-0001.parquet"],
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.total_rows_for_files",
+        lambda _: 2,
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.upload_parquet_files",
+        lambda files, workload, stack, run_id, uploaded_files: uploaded_files.append(
+            "s3://greytl-warehouse/test-prefix/batch-0001.parquet"
+        ),
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.load_polaris_catalog",
+        lambda stack: FakeCatalog(),
+    )
+    monkeypatch.setattr(
+        "benchmarks.pyiceberg_baseline.run.pq.read_schema",
+        lambda _: object(),
+    )
+
+    metrics = benchmark_workload(
+        REFERENCE_WORKLOADS["append_only.orders_events"],
+        tmp_path,
+        {
+            "catalog_uri": "http://127.0.0.1:8181/api/catalog",
+            "catalog_name": "quickstart_catalog",
+            "namespace": "orders_events",
+            "client_id": "root",
+            "client_secret": "catalog-secret",
+            "object_store_endpoint": "http://127.0.0.1:9000",
+            "object_store_bucket": "greytl-warehouse",
+            "object_store_access_key": "object-access",
+            "object_store_secret_key": "object-secret",
+            "object_store_region": "us-west-2",
+        },
+    )
+
+    assert len(create_table_calls) == 1
+    identifier, _schema, kwargs = create_table_calls[0]
+    assert identifier[0] == "orders_events"
+    assert identifier[1].startswith("pyiceberg_baseline_orders_events_")
+    assert kwargs == {}
+    assert metrics["table_location"] == "s3://greytl-warehouse/orders_events/managed-table"

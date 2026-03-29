@@ -118,9 +118,16 @@ fn total_input_bytes(input_files: &[PathBuf]) -> Result<u64> {
     Ok(total)
 }
 
+fn unique_suffix() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::compact_parquet_files;
+    use super::{compact_parquet_files, unique_suffix};
     use crate::parquet_writer::DuckDb;
     use crate::test_support::run_ready;
     use crate::{DuckDbWorker, WriterConfig};
@@ -131,7 +138,6 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn compact_parquet_files_merges_small_inputs_into_one_output() {
@@ -318,18 +324,4 @@ mod tests {
         let path = file_uri.strip_prefix("file://").expect("file URI");
         PathBuf::from(path)
     }
-
-    fn unique_suffix() -> String {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos().to_string())
-            .unwrap_or_else(|_| "0".to_string())
-    }
-}
-
-fn unique_suffix() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos().to_string())
-        .unwrap_or_else(|_| "0".to_string())
 }

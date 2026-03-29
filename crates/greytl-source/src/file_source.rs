@@ -82,7 +82,7 @@ impl FileSource {
         let batch_files = batch_files(&self.fixture_dir);
         let mut record_count = 0;
         for batch_file in &batch_files {
-            record_count += self.load_batch_file(&batch_file)?.records.len();
+            record_count += self.load_batch_file(batch_file)?.records.len();
         }
 
         Ok(CheckReport {
@@ -522,7 +522,7 @@ impl<'a> Parser<'a> {
 
     fn parse_number(&mut self) -> Result<i64> {
         let start = self.pos;
-        if self.try_byte(b'-') {}
+        self.try_byte(b'-');
         while matches!(self.peek_byte(), Some(b'0'..=b'9')) {
             self.pos += 1;
         }

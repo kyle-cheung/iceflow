@@ -18,10 +18,15 @@ These items do not block the first-pass `G1` baseline harness itself, but they s
 ## Deferred Live Benchmark Validation
 
 - Task 10 verification covered the Python smoke tests and the dry-run benchmark entrypoint.
-- The live PyIceberg path that uploads landed Parquet into the local object store and commits through Polaris was not exercised in-session against a running local stack.
 - Re-run the live path in a normal developer shell or CI environment with the local stack up:
   - `just stack-up`
   - `just benchmark-baseline --workload append_only.orders_events`
+- Follow-up verification on March 27, 2026 exercised the live path against the local stack and fixed the first harness-side bug: generated Parquet now uses engine-shaped landed columns instead of `null`-typed JSON structs that PyIceberg rejects during schema conversion.
+- Follow-up verification on March 28, 2026 cleared the remaining local-stack blockers:
+  - the local Polaris bootstrap now marks the S3-compatible RustFS catalog storage as `stsUnavailable: true`, which avoids the `Failed to get subscoped credentials` path during `catalog.create_table(...)`
+  - the benchmark harness now lets Polaris assign the table location instead of forcing an explicit `s3://.../benchmarks/.../table` path outside the catalog's allowed locations
+- With those two changes in place, the live `append_only.orders_events` PyIceberg baseline now completes successfully against the default local stack.
+- Remaining caveat: developers with an older pre-RustFS `infra/local/.env` may still have stale `MINIO_*` credentials. Refresh the file from `infra/local/.env.example` or rely on the `just benchmark-baseline` wrapper, which now exports the current RustFS-compatible `OBJECT_STORE_*` defaults.
 
 ## Known Local Harness Caveat
 
