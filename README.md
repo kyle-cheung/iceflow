@@ -22,15 +22,36 @@ source adapter → Arrow batch → normalize/write worker → Parquet batch + ma
 
 ### Crates
 
-| Crate | Purpose |
-|---|---|
-| `greytl-types` | Canonical IDs, mutation model, manifest model, schema policy |
-| `greytl-state` | SQLite-backed control plane: batch ledger, commit attempts, checkpoints, quarantine |
-| `greytl-source` | Source adapter SDK and deterministic file-based reference source |
-| `greytl-worker-duckdb` | Arrow normalization, Parquet materialization, ordering validation |
-| `greytl-sink` | Sink trait, commit protocol, test doubles, filesystem and Polaris implementations |
-| `greytl-runtime` | Pipeline coordinator, backpressure, single-writer-per-table execution |
-| `greytl-cli` | CLI for running pipelines and offline compaction |
+| Crate | What it owns | Where it sits in the flow |
+|---|---|---|
+| `greytl-types` | Shared domain model: table IDs, logical mutations, manifests, schema policy, reference workload descriptors | Used everywhere; this is the vocabulary the rest of the system agrees on |
+| `greytl-source` | Source adapter trait plus the deterministic file-based reference source | Produces `SourceBatch` values from the fixture/reference workload |
+| `greytl-worker-duckdb` | Normalize records, enforce ordering rules, and materialize landed Parquet + batch manifest | Turns a source batch into the durable replay boundary |
+| `greytl-state` | SQLite-backed control plane for batch registration, file tracking, commit attempts, checkpoint linkage, recovery, and quarantine | Records the authoritative lifecycle of a batch before and after sink commits |
+| `greytl-sink` | Sink contract, idempotent commit protocol, commit lookup/recovery APIs, filesystem sink, Polaris sink, and test doubles | Owns the destination-facing write and commit semantics |
+| `greytl-runtime` | In-memory coordinator for table admission, backpressure, durable-pending tracking, and checkpoint gating | Guards when a table may ingest or checkpoint another batch |
+| `greytl-cli` | Thin executable that wires source + worker + state + sink + runtime into runnable commands | Current operator entrypoint for `run` and `compact` |
+
+### How the Crates Fit Together
+
+The pipeline is intentionally split so each crate owns one boundary:
+
+1. `greytl-source` reads the next snapshot for a source table and returns a `SourceBatch`.
+2. `greytl-worker-duckdb` normalizes that batch into engine-shaped rows and writes landed Parquet plus a deterministic manifest.
+3. `greytl-state` registers the manifest, records the written files, opens a commit attempt, and later records the resolved outcome plus checkpoint linkage.
+4. `greytl-sink` prepares and commits the batch into the destination, with lookup and recovery hooks for uncertain outcomes.
+5. `greytl-runtime` decides whether a table can admit more work and whether checkpoint advancement is still blocked.
+6. `greytl-cli` orchestrates the whole sequence for local runs and offline maintenance tasks.
+
+Said another way:
+
+- `greytl-types` defines the nouns
+- `greytl-source` produces batches
+- `greytl-worker-duckdb` turns batches into replayable files
+- `greytl-state` remembers what happened
+- `greytl-sink` makes destination changes durable
+- `greytl-runtime` enforces sequencing
+- `greytl-cli` is the operator-facing wrapper around all of it
 
 ### Repo Layout
 
@@ -101,6 +122,42 @@ just test-compact
 
 ### Run
 
+The current executable crate is `greytl-cli`.
+
+During development, run it with Cargo:
+
+```sh
+cargo run -p greytl-cli -- run ...
+```
+
+After building, the binary is `greytl-cli` in `target/debug/` or `target/release/`.
+
+```sh
+./target/debug/greytl-cli run ...
+```
+
+The CLI currently exposes two subcommands:
+
+- `run`: execute a reference workload end to end through source → worker → state → sink
+- `compact`: run offline append-only file compaction against an existing table layout
+
+Unlike a typical Clap-based CLI, `greytl-cli --help` is not implemented yet. Treat the README examples below as the current command contract.
+
+#### `run`
+
+Use `run` to execute one of the checked-in reference workloads.
+
+Required:
+
+- `--workload`
+- `--destination-uri`
+
+Optional:
+
+- `--sink filesystem|polaris`
+- `--catalog-uri`, `--catalog`, `--namespace` when `--sink polaris`
+- `--batch-limit` to stop after a fixed number of source batches
+
 ```sh
 # Run the append-only reference workload to a local filesystem destination
 cargo run -p greytl-cli -- run \
@@ -108,6 +165,44 @@ cargo run -p greytl-cli -- run \
   --destination-uri file:///tmp/greytl-demo \
   --sink filesystem
 
+# Run the same workload against Polaris
+cargo run -p greytl-cli -- run \
+  --workload append_only.orders_events \
+  --destination-uri file:///tmp/greytl-demo \
+  --sink polaris \
+  --catalog-uri http://127.0.0.1:8181/api/catalog \
+  --catalog quickstart_catalog \
+  --namespace orders_events
+```
+
+What `run` does internally:
+
+- loads the workload through `greytl-source::FileSource`
+- materializes each batch through `greytl-worker-duckdb::DuckDbWorker`
+- records batch/commit/checkpoint state in `greytl-state::SqliteStateStore`
+- commits through either `greytl-sink::FilesystemSink` or `greytl-sink::PolarisSink`
+- uses `greytl-runtime::RuntimeCoordinator` to gate intake and checkpoint advancement
+
+#### `compact`
+
+Use `compact` to rewrite small append-only files in an existing table directory and emit a machine-readable JSON report.
+
+Required:
+
+- `--warehouse-uri`
+- `--catalog-uri`
+- `--catalog`
+- `--namespace`
+- `--table`
+- `--table-mode`
+- `--min-small-file-bytes`
+- `--max-rewrite-files`
+
+Current limitation:
+
+- `keyed_upsert` compaction is intentionally rejected in this version
+
+```sh
 # Offline compaction
 cargo run -p greytl-cli -- compact \
   --warehouse-uri file:///tmp/greytl-demo \

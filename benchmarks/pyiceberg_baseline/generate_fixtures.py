@@ -78,10 +78,7 @@ def json_text(value: Any) -> str:
 
 
 def timestamp_value(value: Any) -> datetime:
-    if isinstance(value, str):
-        seconds = int(value)
-    else:
-        seconds = int(value)
+    seconds = int(value)
     return datetime.fromtimestamp(seconds, UTC).replace(tzinfo=None)
 
 
