@@ -32,7 +32,7 @@ pub(crate) fn load_base_snapshot_files(snapshot_dir: &Path) -> Result<Vec<Active
     let mut files = Vec::new();
     if !snapshot_dir.exists() {
         anyhow::bail!(
-            "missing iceflow snapshot history at {}",
+            "missing greytl snapshot history at {}",
             snapshot_dir.display()
         );
     }
@@ -232,6 +232,26 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    #[test]
+    fn load_base_snapshot_files_reports_missing_snapshot_history_path() {
+        let snapshot_dir = std::env::temp_dir()
+            .join("iceflow-cli-compact-history-tests")
+            .join("missing-history")
+            .join("_greytl_snapshots");
+        let _ = fs::remove_dir_all(snapshot_dir.parent().expect("temp test parent"));
+
+        let err =
+            load_base_snapshot_files(&snapshot_dir).expect_err("missing snapshot dir should fail");
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "missing greytl snapshot history at {}",
+                snapshot_dir.display()
+            )
+        );
     }
 
     #[test]
