@@ -1,0 +1,7 @@
+[package]
+name = "iceflow-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+iceflow-types = { path = "../iceflow-types" }

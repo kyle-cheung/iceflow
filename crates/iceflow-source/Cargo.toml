@@ -1,0 +1,10 @@
+[package]
+name = "iceflow-source"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { path = "../anyhow" }
+chrono = { path = "../chrono" }
+iceflow-types = { path = "../iceflow-types" }
+serde_json = { path = "../serde_json" }

@@ -18,7 +18,7 @@ def set_runtime_env(monkeypatch) -> None:
     monkeypatch.setenv("POLARIS_ROOT_CLIENT_SECRET", "catalog-secret")
     monkeypatch.setenv("OBJECT_STORE_ACCESS_KEY", "object-access")
     monkeypatch.setenv("OBJECT_STORE_SECRET_KEY", "object-secret")
-    monkeypatch.setenv("OBJECT_STORE_BUCKET", "greytl-warehouse")
+    monkeypatch.setenv("OBJECT_STORE_BUCKET", "iceflow-warehouse")
 
 
 def test_reference_workloads_are_registered_with_expected_defaults() -> None:
@@ -266,14 +266,14 @@ def test_load_polaris_catalog_disables_access_delegation_and_forces_path_style(
             "client_id": "root",
             "client_secret": "catalog-secret",
             "object_store_endpoint": "http://127.0.0.1:9000",
-            "object_store_bucket": "greytl-warehouse",
+            "object_store_bucket": "iceflow-warehouse",
             "object_store_access_key": "object-access",
             "object_store_secret_key": "object-secret",
             "object_store_region": "us-west-2",
         }
     )
 
-    assert captured["name"] == "greytl-pyiceberg-baseline"
+    assert captured["name"] == "iceflow-pyiceberg-baseline"
     properties = captured["properties"]
     assert properties["header.X-Iceberg-Access-Delegation"] == ""
     assert properties["s3.force-virtual-addressing"] == "false"
@@ -325,7 +325,7 @@ def test_benchmark_workload_cleans_up_failed_table_and_uploaded_files(
     monkeypatch.setattr(
         "benchmarks.pyiceberg_baseline.run.upload_parquet_files",
         lambda files, workload, stack, run_id, uploaded_files: uploaded_files.append(
-            "s3://greytl-warehouse/test-prefix/batch-0001.parquet"
+            "s3://iceflow-warehouse/test-prefix/batch-0001.parquet"
         ),
     )
     monkeypatch.setattr(
@@ -352,7 +352,7 @@ def test_benchmark_workload_cleans_up_failed_table_and_uploaded_files(
                 "client_id": "root",
                 "client_secret": "catalog-secret",
                 "object_store_endpoint": "http://127.0.0.1:9000",
-                "object_store_bucket": "greytl-warehouse",
+                "object_store_bucket": "iceflow-warehouse",
                 "object_store_access_key": "object-access",
                 "object_store_secret_key": "object-secret",
                 "object_store_region": "us-west-2",
@@ -365,7 +365,7 @@ def test_benchmark_workload_cleans_up_failed_table_and_uploaded_files(
     assert dropped_identifier[1].startswith("pyiceberg_baseline_orders_events_")
     assert purge_requested is True
     assert fake_catalog.dropped_namespaces == ["orders_events"]
-    assert deleted_files == ["greytl-warehouse/test-prefix/batch-0001.parquet"]
+    assert deleted_files == ["iceflow-warehouse/test-prefix/batch-0001.parquet"]
 
 
 def test_benchmark_workload_cleans_up_partially_uploaded_files_when_upload_fails(
@@ -384,7 +384,7 @@ def test_benchmark_workload_cleans_up_partially_uploaded_files_when_upload_fails
     )
 
     def fake_upload_parquet_files(files, workload, stack, run_id, uploaded_files: list[str]) -> None:
-        uploaded_files.append("s3://greytl-warehouse/test-prefix/batch-0001.parquet")
+        uploaded_files.append("s3://iceflow-warehouse/test-prefix/batch-0001.parquet")
         raise RuntimeError("upload failed")
 
     monkeypatch.setattr(
@@ -407,14 +407,14 @@ def test_benchmark_workload_cleans_up_partially_uploaded_files_when_upload_fails
                 "client_id": "root",
                 "client_secret": "catalog-secret",
                 "object_store_endpoint": "http://127.0.0.1:9000",
-                "object_store_bucket": "greytl-warehouse",
+                "object_store_bucket": "iceflow-warehouse",
                 "object_store_access_key": "object-access",
                 "object_store_secret_key": "object-secret",
                 "object_store_region": "us-west-2",
             },
         )
 
-    assert deleted_files == ["s3://greytl-warehouse/test-prefix/batch-0001.parquet"]
+    assert deleted_files == ["s3://iceflow-warehouse/test-prefix/batch-0001.parquet"]
 
 
 def test_benchmark_workload_preserves_original_exception_when_cleanup_fails(
@@ -453,7 +453,7 @@ def test_benchmark_workload_preserves_original_exception_when_cleanup_fails(
     monkeypatch.setattr(
         "benchmarks.pyiceberg_baseline.run.upload_parquet_files",
         lambda files, workload, stack, run_id, uploaded_files: uploaded_files.append(
-            "s3://greytl-warehouse/test-prefix/batch-0001.parquet"
+            "s3://iceflow-warehouse/test-prefix/batch-0001.parquet"
         ),
     )
     monkeypatch.setattr(
@@ -485,7 +485,7 @@ def test_benchmark_workload_preserves_original_exception_when_cleanup_fails(
                 "client_id": "root",
                 "client_secret": "catalog-secret",
                 "object_store_endpoint": "http://127.0.0.1:9000",
-                "object_store_bucket": "greytl-warehouse",
+                "object_store_bucket": "iceflow-warehouse",
                 "object_store_access_key": "object-access",
                 "object_store_secret_key": "object-secret",
                 "object_store_region": "us-west-2",
@@ -508,7 +508,7 @@ def test_benchmark_workload_uses_catalog_assigned_table_location(
             return None
 
         def location(self) -> str:
-            return "s3://greytl-warehouse/orders_events/managed-table"
+            return "s3://iceflow-warehouse/orders_events/managed-table"
 
     class FakeCatalog:
         def namespace_exists(self, namespace: str) -> bool:
@@ -529,7 +529,7 @@ def test_benchmark_workload_uses_catalog_assigned_table_location(
     monkeypatch.setattr(
         "benchmarks.pyiceberg_baseline.run.upload_parquet_files",
         lambda files, workload, stack, run_id, uploaded_files: uploaded_files.append(
-            "s3://greytl-warehouse/test-prefix/batch-0001.parquet"
+            "s3://iceflow-warehouse/test-prefix/batch-0001.parquet"
         ),
     )
     monkeypatch.setattr(
@@ -551,7 +551,7 @@ def test_benchmark_workload_uses_catalog_assigned_table_location(
             "client_id": "root",
             "client_secret": "catalog-secret",
             "object_store_endpoint": "http://127.0.0.1:9000",
-            "object_store_bucket": "greytl-warehouse",
+            "object_store_bucket": "iceflow-warehouse",
             "object_store_access_key": "object-access",
             "object_store_secret_key": "object-secret",
             "object_store_region": "us-west-2",
@@ -563,4 +563,4 @@ def test_benchmark_workload_uses_catalog_assigned_table_location(
     assert identifier[0] == "orders_events"
     assert identifier[1].startswith("pyiceberg_baseline_orders_events_")
     assert kwargs == {}
-    assert metrics["table_location"] == "s3://greytl-warehouse/orders_events/managed-table"
+    assert metrics["table_location"] == "s3://iceflow-warehouse/orders_events/managed-table"

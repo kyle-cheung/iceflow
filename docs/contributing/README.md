@@ -13,27 +13,27 @@ Start in `AGENTS.md` when you need to orient yourself quickly. Use the files in 
 
 ## Main Crates
 
-- `crates/greytl-types`: shared domain vocabulary, manifest types, mutation modeling, and static reference workload metadata.
-- `crates/greytl-source`: source adapter boundary plus the deterministic file-backed reference source.
-- `crates/greytl-worker-duckdb`: normalization, Parquet materialization, and offline compaction helpers.
-- `crates/greytl-state`: SQLite-backed control plane, migrations, persisted batch/attempt/checkpoint state, and recovery/orphan bookkeeping.
-- `crates/greytl-sink`: sink protocol plus append-only filesystem/Polaris implementations and test-double coverage.
-- `crates/greytl-runtime`: local intake/backpressure and checkpoint gating.
-- `crates/greytl-cli`: operator-facing command wiring for `run` and append-only `compact`.
+- `crates/iceflow-types`: shared domain vocabulary, manifest types, mutation modeling, and static reference workload metadata.
+- `crates/iceflow-source`: source adapter boundary plus the deterministic file-backed reference source.
+- `crates/iceflow-worker-duckdb`: normalization, Parquet materialization, and offline compaction helpers.
+- `crates/iceflow-state`: SQLite-backed control plane, migrations, persisted batch/attempt/checkpoint state, and recovery/orphan bookkeeping.
+- `crates/iceflow-sink`: sink protocol plus append-only filesystem/Polaris implementations and test-double coverage.
+- `crates/iceflow-runtime`: local intake/backpressure and checkpoint gating.
+- `crates/iceflow-cli`: operator-facing command wiring for `run` and append-only `compact`.
 
 ## Crate Guides
 
-- `docs/contributing/crates/greytl-types.md`
-- `docs/contributing/crates/greytl-source.md`
-- `docs/contributing/crates/greytl-worker-duckdb.md`
-- `docs/contributing/crates/greytl-state.md`
-- `docs/contributing/crates/greytl-sink.md`
-- `docs/contributing/crates/greytl-runtime.md`
-- `docs/contributing/crates/greytl-cli.md`
+- `docs/contributing/crates/iceflow-types.md`
+- `docs/contributing/crates/iceflow-source.md`
+- `docs/contributing/crates/iceflow-worker-duckdb.md`
+- `docs/contributing/crates/iceflow-state.md`
+- `docs/contributing/crates/iceflow-sink.md`
+- `docs/contributing/crates/iceflow-runtime.md`
+- `docs/contributing/crates/iceflow-cli.md`
 
 ## Non-Crate Surfaces
 
-- `fixtures/reference_workload_v0/`: checked-in reference workloads; when workload names or routing change, update `greytl-source`, `greytl-cli`, `greytl-types`, and `benchmarks/pyiceberg_baseline/` alongside the fixtures.
+- `fixtures/reference_workload_v0/`: checked-in reference workloads; when workload names or routing change, update `iceflow-source`, `iceflow-cli`, `iceflow-types`, and `benchmarks/pyiceberg_baseline/` alongside the fixtures.
 - `infra/local/`: local Polaris/object-store bootstrap, env templates, and stack scripts; pair this with `just stack-up`, `just stack-down`, and `just test-real-stack`.
 - `README.md`: product architecture, current CLI contract, and operator-facing examples.
 

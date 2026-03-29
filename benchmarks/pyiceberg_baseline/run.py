@@ -22,7 +22,7 @@ from benchmarks.pyiceberg_baseline.generate_fixtures import generate_fixtures
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "benchmarks" / "pyiceberg_baseline" / "latest-report.json"
-DEFAULT_DATA_DIR = Path(tempfile.gettempdir()) / "greytl-pyiceberg-baseline" / "landed"
+DEFAULT_DATA_DIR = Path(tempfile.gettempdir()) / "iceflow-pyiceberg-baseline" / "landed"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -135,7 +135,7 @@ def resolve_stack_config() -> dict[str, str]:
         ),
         "object_store_bucket": os.environ.get(
             "OBJECT_STORE_BUCKET",
-            os.environ.get("MINIO_BUCKET", "greytl-warehouse"),
+            os.environ.get("MINIO_BUCKET", "iceflow-warehouse"),
         ),
         "object_store_access_key": require_env("OBJECT_STORE_ACCESS_KEY", "MINIO_ROOT_USER"),
         "object_store_secret_key": require_env(
@@ -256,7 +256,7 @@ def load_polaris_catalog(stack: dict[str, str]) -> "Catalog":
     from pyiceberg.catalog import Catalog, load_catalog
 
     return load_catalog(
-        "greytl-pyiceberg-baseline",
+        "iceflow-pyiceberg-baseline",
         type="rest",
         uri=stack["catalog_uri"],
         warehouse=stack["catalog_name"],

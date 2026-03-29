@@ -29,109 +29,109 @@
 
 ### Crates
 
-- Create: `crates/greytl-types/Cargo.toml`
+- Create: `crates/iceflow-types/Cargo.toml`
   Responsibility: Package manifest for canonical types.
-- Create: `crates/greytl-types/src/lib.rs`
+- Create: `crates/iceflow-types/src/lib.rs`
   Responsibility: Re-export canonical IDs, mutation model, manifest model, ordering metadata, schema policy, and table-mode validation.
-- Create: `crates/greytl-types/src/ids.rs`
+- Create: `crates/iceflow-types/src/ids.rs`
   Responsibility: Strongly typed `BatchId`, `CommitAttemptId`, `TableId`, and checkpoint identifiers.
-- Create: `crates/greytl-types/src/mutation.rs`
+- Create: `crates/iceflow-types/src/mutation.rs`
   Responsibility: Logical mutation model, delete-tombstone shape, table-mode rules, and validation helpers.
-- Create: `crates/greytl-types/src/manifest.rs`
+- Create: `crates/iceflow-types/src/manifest.rs`
   Responsibility: Replayable Parquet batch manifest and checksum helpers.
-- Create: `crates/greytl-types/src/schema_policy.rs`
+- Create: `crates/iceflow-types/src/schema_policy.rs`
   Responsibility: v0 schema evolution policy, retry-time revalidation rules, and key-column immutability checks.
-- Create: `crates/greytl-types/src/reference_workload.rs`
+- Create: `crates/iceflow-types/src/reference_workload.rs`
   Responsibility: Reference workload constants used by tests and benchmark harnesses.
-- Create: `crates/greytl-types/tests/manifest_contract.rs`
+- Create: `crates/iceflow-types/tests/manifest_contract.rs`
   Responsibility: Validate manifest shape, checksum behavior, and replay identity invariants.
 
-- Create: `crates/greytl-state/Cargo.toml`
+- Create: `crates/iceflow-state/Cargo.toml`
   Responsibility: Package manifest for the control-plane crate.
-- Create: `crates/greytl-state/src/lib.rs`
+- Create: `crates/iceflow-state/src/lib.rs`
   Responsibility: Public API for the control plane, repository traits, and recovery entrypoints.
-- Create: `crates/greytl-state/src/sqlite.rs`
+- Create: `crates/iceflow-state/src/sqlite.rs`
   Responsibility: SQLite WAL implementation of batch, attempt, checkpoint, and quarantine persistence.
-- Create: `crates/greytl-state/src/migrations.rs`
+- Create: `crates/iceflow-state/src/migrations.rs`
   Responsibility: Schema creation and migrations for the ledger tables.
-- Create: `crates/greytl-state/src/recovery.rs`
+- Create: `crates/iceflow-state/src/recovery.rs`
   Responsibility: Batch and attempt state transitions, recovery resolution logic, and orphan classification.
-- Create: `crates/greytl-state/src/reconcile.rs`
+- Create: `crates/iceflow-state/src/reconcile.rs`
   Responsibility: Recovery-candidate listing, orphan detection, checkpoint-link verification, and durable cleanup recording.
-- Create: `crates/greytl-state/tests/recovery.rs`
+- Create: `crates/iceflow-state/tests/recovery.rs`
   Responsibility: Validate recovery state transitions and attempt-to-batch mappings.
-- Create: `crates/greytl-state/tests/reconcile.rs`
+- Create: `crates/iceflow-state/tests/reconcile.rs`
   Responsibility: Validate orphan classification, cleanup recording, and checkpoint-link verification.
 
-- Create: `crates/greytl-source/Cargo.toml`
+- Create: `crates/iceflow-source/Cargo.toml`
   Responsibility: Package manifest for source adapters.
-- Create: `crates/greytl-source/src/lib.rs`
+- Create: `crates/iceflow-source/src/lib.rs`
   Responsibility: Minimal source SDK surface and adapter contracts for the narrowed v0 slice.
-- Create: `crates/greytl-source/src/adapter.rs`
+- Create: `crates/iceflow-source/src/adapter.rs`
   Responsibility: `spec`, `check`, `discover`, `snapshot`, and `checkpoint` traits and request/response types.
-- Create: `crates/greytl-source/src/file_source.rs`
+- Create: `crates/iceflow-source/src/file_source.rs`
   Responsibility: Deterministic file-based reference source that emits ordered batches from fixtures.
-- Create: `crates/greytl-source/tests/source_adapter.rs`
+- Create: `crates/iceflow-source/tests/source_adapter.rs`
   Responsibility: Validate the connector SDK lifecycle and ordering/checkpoint contract for the file source.
 
-- Create: `crates/greytl-worker-duckdb/Cargo.toml`
+- Create: `crates/iceflow-worker-duckdb/Cargo.toml`
   Responsibility: Package manifest for the DuckDB worker.
-- Create: `crates/greytl-worker-duckdb/src/lib.rs`
+- Create: `crates/iceflow-worker-duckdb/src/lib.rs`
   Responsibility: DuckDB worker façade used by the runtime.
-- Create: `crates/greytl-worker-duckdb/src/normalize.rs`
+- Create: `crates/iceflow-worker-duckdb/src/normalize.rs`
   Responsibility: Arrow normalization, type coercion, ordering validation, and latest-wins reduction.
-- Create: `crates/greytl-worker-duckdb/src/parquet_writer.rs`
+- Create: `crates/iceflow-worker-duckdb/src/parquet_writer.rs`
   Responsibility: Parquet materialization, file rolling, row-group flushing, and manifest output.
 
-- Create: `crates/greytl-sink/Cargo.toml`
+- Create: `crates/iceflow-sink/Cargo.toml`
   Responsibility: Package manifest for sink implementations.
-- Create: `crates/greytl-sink/src/lib.rs`
+- Create: `crates/iceflow-sink/src/lib.rs`
   Responsibility: Sink trait, commit protocol types, and sink implementations.
-- Create: `crates/greytl-sink/src/commit_protocol.rs`
+- Create: `crates/iceflow-sink/src/commit_protocol.rs`
   Responsibility: `prepare_commit`, `commit`, `lookup_commit`, `lookup_snapshot`, and `resolve_uncertain_commit`.
-- Create: `crates/greytl-sink/src/test_double.rs`
+- Create: `crates/iceflow-sink/src/test_double.rs`
   Responsibility: Deterministic sink with failpoints for Tier 1 tests.
-- Create: `crates/greytl-sink/src/filesystem.rs`
+- Create: `crates/iceflow-sink/src/filesystem.rs`
   Responsibility: Local filesystem-backed warehouse sink used in Tier 1 deterministic integration tests.
-- Create: `crates/greytl-sink/src/polaris.rs`
+- Create: `crates/iceflow-sink/src/polaris.rs`
   Responsibility: Real-stack sink implementation against the Polaris plus local S3-compatible reference stack.
-- Create: `crates/greytl-sink/tests/sink_protocol.rs`
+- Create: `crates/iceflow-sink/tests/sink_protocol.rs`
   Responsibility: Validate sink protocol semantics against the deterministic test double.
-- Create: `crates/greytl-sink/tests/deterministic_append_only.rs`
+- Create: `crates/iceflow-sink/tests/deterministic_append_only.rs`
   Responsibility: Deterministic `append_only` correctness and recovery tests.
-- Create: `crates/greytl-sink/tests/deterministic_keyed_upsert.rs`
+- Create: `crates/iceflow-sink/tests/deterministic_keyed_upsert.rs`
   Responsibility: Deterministic constrained `keyed_upsert` correctness tests.
-- Create: `crates/greytl-sink/tests/deterministic_recovery.rs`
+- Create: `crates/iceflow-sink/tests/deterministic_recovery.rs`
   Responsibility: Lost ack, failed commit, duplicate replay, and orphan cleanup scenarios.
-- Create: `crates/greytl-sink/tests/polaris_append_only.rs`
+- Create: `crates/iceflow-sink/tests/polaris_append_only.rs`
   Responsibility: Reference real-stack `append_only` correctness tests.
-- Create: `crates/greytl-sink/tests/polaris_keyed_upsert.rs`
+- Create: `crates/iceflow-sink/tests/polaris_keyed_upsert.rs`
   Responsibility: Reference real-stack constrained `keyed_upsert` tests.
-- Create: `crates/greytl-sink/tests/polaris_recovery.rs`
+- Create: `crates/iceflow-sink/tests/polaris_recovery.rs`
   Responsibility: Real-stack uncertain-commit and retry-time schema-revalidation tests.
 
-- Create: `crates/greytl-runtime/Cargo.toml`
+- Create: `crates/iceflow-runtime/Cargo.toml`
   Responsibility: Package manifest for the runtime coordinator.
-- Create: `crates/greytl-runtime/src/lib.rs`
+- Create: `crates/iceflow-runtime/src/lib.rs`
   Responsibility: Runtime coordinator entrypoints.
-- Create: `crates/greytl-runtime/src/pipeline.rs`
+- Create: `crates/iceflow-runtime/src/pipeline.rs`
   Responsibility: Batch admission, single-writer-per-table execution, and checkpoint sequencing.
-- Create: `crates/greytl-runtime/src/backpressure.rs`
+- Create: `crates/iceflow-runtime/src/backpressure.rs`
   Responsibility: Queue limits, memory budgets, and intake pause behavior.
-- Create: `crates/greytl-runtime/src/failpoints.rs`
+- Create: `crates/iceflow-runtime/src/failpoints.rs`
   Responsibility: Failure injection hooks shared by deterministic and real-stack tests.
-- Create: `crates/greytl-runtime/tests/backpressure.rs`
+- Create: `crates/iceflow-runtime/tests/backpressure.rs`
   Responsibility: Queue saturation and intake-pause behavior.
 
-- Create: `crates/greytl-cli/Cargo.toml`
+- Create: `crates/iceflow-cli/Cargo.toml`
   Responsibility: Package manifest for the CLI.
-- Create: `crates/greytl-cli/src/main.rs`
+- Create: `crates/iceflow-cli/src/main.rs`
   Responsibility: CLI entrypoint.
-- Create: `crates/greytl-cli/src/commands/run.rs`
+- Create: `crates/iceflow-cli/src/commands/run.rs`
   Responsibility: Run the v0 reference pipeline against file fixtures.
-- Create: `crates/greytl-cli/src/commands/compact.rs`
+- Create: `crates/iceflow-cli/src/commands/compact.rs`
   Responsibility: Offline compaction command and JSON report output.
-- Create: `crates/greytl-cli/tests/compact.rs`
+- Create: `crates/iceflow-cli/tests/compact.rs`
   Responsibility: Validate offline compaction output and CLI contract.
 
 ### Fixtures
@@ -165,22 +165,22 @@
 - Create: `Cargo.toml`
 - Create: `rust-toolchain.toml`
 - Create: `justfile`
-- Create: `crates/greytl-types/Cargo.toml`
-- Create: `crates/greytl-state/Cargo.toml`
-- Create: `crates/greytl-source/Cargo.toml`
-- Create: `crates/greytl-worker-duckdb/Cargo.toml`
-- Create: `crates/greytl-sink/Cargo.toml`
-- Create: `crates/greytl-runtime/Cargo.toml`
-- Create: `crates/greytl-cli/Cargo.toml`
-- Create: `crates/greytl-types/src/lib.rs`
-- Create: `crates/greytl-types/src/ids.rs`
-- Create: `crates/greytl-types/src/mutation.rs`
-- Create: `crates/greytl-types/src/manifest.rs`
-- Create: `crates/greytl-types/src/schema_policy.rs`
-- Create: `crates/greytl-types/src/reference_workload.rs`
-- Create: `crates/greytl-types/tests/manifest_contract.rs`
-- Test: `crates/greytl-types/src/mutation.rs`
-- Test: `crates/greytl-types/src/schema_policy.rs`
+- Create: `crates/iceflow-types/Cargo.toml`
+- Create: `crates/iceflow-state/Cargo.toml`
+- Create: `crates/iceflow-source/Cargo.toml`
+- Create: `crates/iceflow-worker-duckdb/Cargo.toml`
+- Create: `crates/iceflow-sink/Cargo.toml`
+- Create: `crates/iceflow-runtime/Cargo.toml`
+- Create: `crates/iceflow-cli/Cargo.toml`
+- Create: `crates/iceflow-types/src/lib.rs`
+- Create: `crates/iceflow-types/src/ids.rs`
+- Create: `crates/iceflow-types/src/mutation.rs`
+- Create: `crates/iceflow-types/src/manifest.rs`
+- Create: `crates/iceflow-types/src/schema_policy.rs`
+- Create: `crates/iceflow-types/src/reference_workload.rs`
+- Create: `crates/iceflow-types/tests/manifest_contract.rs`
+- Test: `crates/iceflow-types/src/mutation.rs`
+- Test: `crates/iceflow-types/src/schema_policy.rs`
 
 - [ ] **Step 1: Write failing canonical-model tests**
 
@@ -212,10 +212,10 @@ fn schema_policy_rejects_key_column_widening() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-types delete_mutation_requires_null_after -- --exact`
+Run: `cargo test -p iceflow-types delete_mutation_requires_null_after -- --exact`
 Expected: FAIL because the crate and validation functions do not exist yet.
 
-Run: `cargo test -p greytl-types schema_policy_rejects_key_column_widening -- --exact`
+Run: `cargo test -p iceflow-types schema_policy_rejects_key_column_widening -- --exact`
 Expected: FAIL because the crate and validation functions do not exist yet.
 
 - [ ] **Step 3: Create the workspace and implement minimal canonical types**
@@ -298,7 +298,7 @@ Manifest ownership boundary:
 
 - [ ] **Step 5: Run crate tests and fast entrypoint**
 
-Run: `cargo test -p greytl-types`
+Run: `cargo test -p iceflow-types`
 Expected: PASS
 
 Run: `just test-fast`
@@ -307,21 +307,21 @@ Expected: invokes the workspace fast-test command and exits `0`.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Cargo.toml rust-toolchain.toml justfile crates/greytl-types crates/greytl-state/Cargo.toml crates/greytl-source/Cargo.toml crates/greytl-worker-duckdb/Cargo.toml crates/greytl-sink/Cargo.toml crates/greytl-runtime/Cargo.toml crates/greytl-cli/Cargo.toml
+git add Cargo.toml rust-toolchain.toml justfile crates/iceflow-types crates/iceflow-state/Cargo.toml crates/iceflow-source/Cargo.toml crates/iceflow-worker-duckdb/Cargo.toml crates/iceflow-sink/Cargo.toml crates/iceflow-runtime/Cargo.toml crates/iceflow-cli/Cargo.toml
 git commit -m "feat: add canonical ETL types and schema policy"
 ```
 
 ### Task 2: Implement The SQLite Control Plane And Recovery State Machine
 
 **Files:**
-- Create: `crates/greytl-state/src/lib.rs`
-- Create: `crates/greytl-state/src/sqlite.rs`
-- Create: `crates/greytl-state/src/migrations.rs`
-- Create: `crates/greytl-state/src/recovery.rs`
-- Create: `crates/greytl-state/src/reconcile.rs`
-- Test: `crates/greytl-state/tests/recovery.rs`
-- Test: `crates/greytl-state/tests/reconcile.rs`
-- Test: `crates/greytl-types/tests/manifest_contract.rs`
+- Create: `crates/iceflow-state/src/lib.rs`
+- Create: `crates/iceflow-state/src/sqlite.rs`
+- Create: `crates/iceflow-state/src/migrations.rs`
+- Create: `crates/iceflow-state/src/recovery.rs`
+- Create: `crates/iceflow-state/src/reconcile.rs`
+- Test: `crates/iceflow-state/tests/recovery.rs`
+- Test: `crates/iceflow-state/tests/reconcile.rs`
+- Test: `crates/iceflow-types/tests/manifest_contract.rs`
 
 - [ ] **Step 1: Write failing ledger-transition tests**
 
@@ -342,7 +342,7 @@ async fn ambiguous_resolution_quarantines_the_batch() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-state ambiguous_resolution_quarantines_the_batch`
+Run: `cargo test -p iceflow-state ambiguous_resolution_quarantines_the_batch`
 Expected: FAIL because the control-plane crate does not exist yet.
 
 - [ ] **Step 3: Create the SQLite WAL schema and repository interface**
@@ -384,29 +384,29 @@ pub enum AttemptStatus {
 
 - [ ] **Step 5: Implement recovery transitions, reconciler APIs, checkpoint linkage, and manifest contract tests**
 
-Run: `cargo test -p greytl-state`
+Run: `cargo test -p iceflow-state`
 Expected: PASS
 
-Run: `cargo test -p greytl-state --test reconcile`
+Run: `cargo test -p iceflow-state --test reconcile`
 Expected: PASS
 
-Run: `cargo test -p greytl-types --test manifest_contract`
+Run: `cargo test -p iceflow-types --test manifest_contract`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/greytl-state crates/greytl-types/tests/manifest_contract.rs
+git add crates/iceflow-state crates/iceflow-types/tests/manifest_contract.rs
 git commit -m "feat: add sqlite control plane and recovery state machine"
 ```
 
 ### Task 3: Build The Minimal Source SDK And Reference File Source
 
 **Files:**
-- Create: `crates/greytl-source/src/lib.rs`
-- Create: `crates/greytl-source/src/adapter.rs`
-- Create: `crates/greytl-source/src/file_source.rs`
-- Create: `crates/greytl-source/tests/source_adapter.rs`
+- Create: `crates/iceflow-source/src/lib.rs`
+- Create: `crates/iceflow-source/src/adapter.rs`
+- Create: `crates/iceflow-source/src/file_source.rs`
+- Create: `crates/iceflow-source/tests/source_adapter.rs`
 - Create: `fixtures/reference_workload_v0/orders_events/`
 - Create: `fixtures/reference_workload_v0/customer_state/`
 - Create: `fixtures/reference_workload_v0/expected/`
@@ -426,7 +426,7 @@ async fn file_source_emits_monotonic_ordering_for_customer_state() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-source --test source_adapter -- file_source_emits_monotonic_ordering_for_customer_state`
+Run: `cargo test -p iceflow-source --test source_adapter -- file_source_emits_monotonic_ordering_for_customer_state`
 Expected: FAIL because the source SDK and fixtures are missing.
 
 - [ ] **Step 3: Define the narrowed v0 connector SDK**
@@ -459,7 +459,7 @@ impl FileSource {
 
 - [ ] **Step 5: Run contract tests and fixture sanity checks**
 
-Run: `cargo test -p greytl-source --test source_adapter`
+Run: `cargo test -p iceflow-source --test source_adapter`
 Expected: PASS
 
 Run: `just test-fast`
@@ -468,18 +468,18 @@ Expected: PASS with source-contract tests included.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/greytl-source fixtures/reference_workload_v0
+git add crates/iceflow-source fixtures/reference_workload_v0
 git commit -m "feat: add file source and connector contract tests"
 ```
 
 ### Task 4: Add The In-Process DuckDB Worker And Replayable Parquet Materialization
 
 **Files:**
-- Create: `crates/greytl-worker-duckdb/src/lib.rs`
-- Create: `crates/greytl-worker-duckdb/src/normalize.rs`
-- Create: `crates/greytl-worker-duckdb/src/parquet_writer.rs`
-- Test: `crates/greytl-worker-duckdb/src/normalize.rs`
-- Test: `crates/greytl-worker-duckdb/src/parquet_writer.rs`
+- Create: `crates/iceflow-worker-duckdb/src/lib.rs`
+- Create: `crates/iceflow-worker-duckdb/src/normalize.rs`
+- Create: `crates/iceflow-worker-duckdb/src/parquet_writer.rs`
+- Test: `crates/iceflow-worker-duckdb/src/normalize.rs`
+- Test: `crates/iceflow-worker-duckdb/src/parquet_writer.rs`
 
 - [ ] **Step 1: Write failing materialization tests**
 
@@ -500,7 +500,7 @@ async fn parquet_manifest_freezes_ordering_span_and_checksum() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-worker-duckdb parquet_manifest_freezes_ordering_span_and_checksum`
+Run: `cargo test -p iceflow-worker-duckdb parquet_manifest_freezes_ordering_span_and_checksum`
 Expected: FAIL because the worker crate does not exist yet.
 
 - [ ] **Step 3: Implement Arrow normalization and latest-wins reduction**
@@ -533,26 +533,26 @@ pub async fn write_parquet(&self, batch: NormalizedBatch) -> Result<Materialized
 
 - [ ] **Step 5: Run worker tests**
 
-Run: `cargo test -p greytl-worker-duckdb`
+Run: `cargo test -p iceflow-worker-duckdb`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/greytl-worker-duckdb
+git add crates/iceflow-worker-duckdb
 git commit -m "feat: add duckdb normalization and parquet materialization"
 ```
 
 ### Task 5: Implement The Sink Protocol And Deterministic `append_only` Commit Flow
 
 **Files:**
-- Create: `crates/greytl-sink/src/lib.rs`
-- Create: `crates/greytl-sink/src/commit_protocol.rs`
-- Create: `crates/greytl-sink/src/test_double.rs`
-- Create: `crates/greytl-sink/src/filesystem.rs`
-- Create: `crates/greytl-sink/tests/sink_protocol.rs`
-- Create: `crates/greytl-sink/tests/deterministic_append_only.rs`
-- Create: `crates/greytl-sink/tests/deterministic_recovery.rs`
+- Create: `crates/iceflow-sink/src/lib.rs`
+- Create: `crates/iceflow-sink/src/commit_protocol.rs`
+- Create: `crates/iceflow-sink/src/test_double.rs`
+- Create: `crates/iceflow-sink/src/filesystem.rs`
+- Create: `crates/iceflow-sink/tests/sink_protocol.rs`
+- Create: `crates/iceflow-sink/tests/deterministic_append_only.rs`
+- Create: `crates/iceflow-sink/tests/deterministic_recovery.rs`
 
 - [ ] **Step 1: Write failing sink-contract tests**
 
@@ -572,7 +572,7 @@ async fn duplicate_append_only_replay_reuses_the_same_commit_identity() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-sink --test sink_protocol -- duplicate_append_only_replay_reuses_the_same_commit_identity`
+Run: `cargo test -p iceflow-sink --test sink_protocol -- duplicate_append_only_replay_reuses_the_same_commit_identity`
 Expected: FAIL because the sink protocol is not implemented.
 
 - [ ] **Step 3: Implement the destination-only sink trait and failpoint-capable test double**
@@ -590,7 +590,7 @@ pub trait Sink {
 
 - [ ] **Step 4: Wire `append_only` through state store, worker output, the sink test double, and the Tier 1 filesystem-backed warehouse sink**
 
-Run: `cargo test -p greytl-sink --test deterministic_append_only`
+Run: `cargo test -p iceflow-sink --test deterministic_append_only`
 Expected: PASS for:
 - happy-path append commit
 - lost-ack recovery
@@ -600,7 +600,7 @@ Expected: PASS for:
 
 - [ ] **Step 5: Run deterministic recovery tests**
 
-Run: `cargo test -p greytl-sink --test deterministic_recovery`
+Run: `cargo test -p iceflow-sink --test deterministic_recovery`
 Expected: PASS for:
 - commit succeeds but ack is lost
 - commit fails after files are written
@@ -610,17 +610,17 @@ Expected: PASS for:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/greytl-sink
+git add crates/iceflow-sink
 git commit -m "feat: add deterministic sink protocol and append-only commit flow"
 ```
 
 ### Task 6: Implement Constrained `keyed_upsert` With Equality-Delete-Plus-Append
 
 **Files:**
-- Modify: `crates/greytl-worker-duckdb/src/normalize.rs`
-- Modify: `crates/greytl-sink/src/commit_protocol.rs`
-- Modify: `crates/greytl-sink/src/test_double.rs`
-- Create: `crates/greytl-sink/tests/deterministic_keyed_upsert.rs`
+- Modify: `crates/iceflow-worker-duckdb/src/normalize.rs`
+- Modify: `crates/iceflow-sink/src/commit_protocol.rs`
+- Modify: `crates/iceflow-sink/src/test_double.rs`
+- Create: `crates/iceflow-sink/tests/deterministic_keyed_upsert.rs`
 
 - [ ] **Step 1: Write failing `keyed_upsert` tests**
 
@@ -638,7 +638,7 @@ async fn keyed_upsert_emits_equality_deletes_and_latest_rows_only() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-sink --test deterministic_keyed_upsert -- keyed_upsert_emits_equality_deletes_and_latest_rows_only`
+Run: `cargo test -p iceflow-sink --test deterministic_keyed_upsert -- keyed_upsert_emits_equality_deletes_and_latest_rows_only`
 Expected: FAIL because the keyed-upsert path is not implemented yet.
 
 - [ ] **Step 3: Add latest-wins reduction and tombstone handling**
@@ -658,7 +658,7 @@ pub fn plan_keyed_upsert_commit(batch: NormalizedBatch) -> Result<KeyedUpsertPla
 
 - [ ] **Step 4: Add retry-time schema-revalidation tests for keyed-upsert**
 
-Run: `cargo test -p greytl-sink --test deterministic_keyed_upsert`
+Run: `cargo test -p iceflow-sink --test deterministic_keyed_upsert`
 Expected: PASS for:
 - latest-wins behavior
 - delete tombstones with `after=null`
@@ -669,18 +669,18 @@ Expected: PASS for:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/greytl-worker-duckdb/src/normalize.rs crates/greytl-sink
+git add crates/iceflow-worker-duckdb/src/normalize.rs crates/iceflow-sink
 git commit -m "feat: add constrained keyed upsert flow"
 ```
 
 ### Task 7: Add The Runtime Coordinator, Backpressure, And Checkpoint Sequencing
 
 **Files:**
-- Create: `crates/greytl-runtime/src/lib.rs`
-- Create: `crates/greytl-runtime/src/pipeline.rs`
-- Create: `crates/greytl-runtime/src/backpressure.rs`
-- Create: `crates/greytl-runtime/src/failpoints.rs`
-- Create: `crates/greytl-runtime/tests/backpressure.rs`
+- Create: `crates/iceflow-runtime/src/lib.rs`
+- Create: `crates/iceflow-runtime/src/pipeline.rs`
+- Create: `crates/iceflow-runtime/src/backpressure.rs`
+- Create: `crates/iceflow-runtime/src/failpoints.rs`
+- Create: `crates/iceflow-runtime/tests/backpressure.rs`
 
 - [ ] **Step 1: Write failing backpressure tests**
 
@@ -697,7 +697,7 @@ async fn full_parquet_slot_pauses_source_intake_for_the_table() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-runtime --test backpressure -- full_parquet_slot_pauses_source_intake_for_the_table`
+Run: `cargo test -p iceflow-runtime --test backpressure -- full_parquet_slot_pauses_source_intake_for_the_table`
 Expected: FAIL because the runtime crate does not exist.
 
 - [ ] **Step 3: Implement single-writer-per-table execution and queue accounting**
@@ -720,7 +720,7 @@ impl TableBudget {
 
 - [ ] **Step 4: Implement checkpoint advancement only after durable linkage**
 
-Run: `cargo test -p greytl-runtime`
+Run: `cargo test -p iceflow-runtime`
 Expected: PASS for:
 - paused intake on per-table saturation
 - global pause on recovery-queue saturation
@@ -729,22 +729,22 @@ Expected: PASS for:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/greytl-runtime
+git add crates/iceflow-runtime
 git commit -m "feat: add runtime coordination and backpressure controls"
 ```
 
 ### Task 8: Add The CLI, Local Stack, Real-Stack Tests, And CI Entry Points
 
 **Files:**
-- Create: `crates/greytl-cli/src/main.rs`
-- Create: `crates/greytl-cli/src/commands/run.rs`
-- Create: `crates/greytl-sink/src/polaris.rs`
+- Create: `crates/iceflow-cli/src/main.rs`
+- Create: `crates/iceflow-cli/src/commands/run.rs`
+- Create: `crates/iceflow-sink/src/polaris.rs`
 - Create: `infra/local/docker-compose.yml`
 - Create: `infra/local/object-store-init.sh`
 - Create: `.github/workflows/ci.yml`
-- Create: `crates/greytl-sink/tests/polaris_append_only.rs`
-- Create: `crates/greytl-sink/tests/polaris_keyed_upsert.rs`
-- Create: `crates/greytl-sink/tests/polaris_recovery.rs`
+- Create: `crates/iceflow-sink/tests/polaris_append_only.rs`
+- Create: `crates/iceflow-sink/tests/polaris_keyed_upsert.rs`
+- Create: `crates/iceflow-sink/tests/polaris_recovery.rs`
 - Modify: `justfile`
 
 - [ ] **Step 1: Write failing CLI and real-stack smoke tests**
@@ -761,7 +761,7 @@ fn cli_exposes_run_and_compact_subcommands() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-cli cli_exposes_run_and_compact_subcommands`
+Run: `cargo test -p iceflow-cli cli_exposes_run_and_compact_subcommands`
 Expected: FAIL because the CLI crate does not exist.
 
 - [ ] **Step 3: Implement the CLI, Polaris sink, and local-stack scripts**
@@ -806,7 +806,7 @@ Expected: PASS for:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/greytl-cli crates/greytl-sink/src/polaris.rs infra/local .github/workflows/ci.yml justfile
+git add crates/iceflow-cli crates/iceflow-sink/src/polaris.rs infra/local .github/workflows/ci.yml justfile
 git commit -m "feat: add cli, local stack, and real-stack test flow"
 ```
 
@@ -823,7 +823,7 @@ git commit -m "feat: add cli, local stack, and real-stack test flow"
 
 - [ ] **Step 1: Verify the current Polaris path does not use presigned URLs**
 
-Run: `rg -n "presign|presigned" crates/greytl-sink/src/polaris.rs infra/local/polaris-bootstrap.sh`
+Run: `rg -n "presign|presigned" crates/iceflow-sink/src/polaris.rs infra/local/polaris-bootstrap.sh`
 Expected: PASS with no matches.
 
 - [ ] **Step 2: Document RustFS as the current default local backend and record the presigned URL audit finding**
@@ -831,7 +831,7 @@ Expected: PASS with no matches.
 - rename bootstrap helpers and env vars so they refer to `object store` first and provider second
 - keep RustFS as the current default local backend behind the generic object-store contract
 - require a raw S3 compatibility probe against the same endpoint, bucket, credentials, and path-style settings Polaris uses
-- document that the current Polaris sink path still stages committed data into a local `file://` warehouse, so this gate does not yet prove end-to-end greytl data-file writes through the S3-compatible store
+- document that the current Polaris sink path still stages committed data into a local `file://` warehouse, so this gate does not yet prove end-to-end iceflow data-file writes through the S3-compatible store
 - document the presigned URL audit finding before treating RustFS as passing the spike
 
 - [ ] **Step 3: Add a provider-swap seam before replacing the default backend**
@@ -867,8 +867,8 @@ git commit -m "plan: generalize local object store follow-up"
 ### Task 9: Implement The Offline Compaction Utility
 
 **Files:**
-- Create: `crates/greytl-cli/src/commands/compact.rs`
-- Create: `crates/greytl-cli/tests/compact.rs`
+- Create: `crates/iceflow-cli/src/commands/compact.rs`
+- Create: `crates/iceflow-cli/tests/compact.rs`
 - Modify: `justfile`
 
 - [ ] **Step 1: Write failing compaction tests**
@@ -886,7 +886,7 @@ async fn compact_command_rewrites_small_files_and_emits_report() {
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `cargo test -p greytl-cli --test compact -- compact_command_rewrites_small_files_and_emits_report`
+Run: `cargo test -p iceflow-cli --test compact -- compact_command_rewrites_small_files_and_emits_report`
 Expected: FAIL because the compact command is not implemented.
 
 - [ ] **Step 3: Implement the minimum offline compaction contract**
@@ -912,13 +912,13 @@ pub struct CompactReport {
 
 - [ ] **Step 4: Run compaction tests**
 
-Run: `cargo test -p greytl-cli --test compact`
+Run: `cargo test -p iceflow-cli --test compact`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/greytl-cli/src/commands/compact.rs crates/greytl-cli/tests/compact.rs justfile
+git add crates/iceflow-cli/src/commands/compact.rs crates/iceflow-cli/tests/compact.rs justfile
 git commit -m "feat: add offline compaction utility"
 ```
 

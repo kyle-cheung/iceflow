@@ -10,48 +10,48 @@ If you do not know something or you think that a direction we're taking is wrong
 - `just stack-down`
 - `just test-compact`
 - `just test-fast`
-- `cargo test -p greytl-state --test recovery`
-- `cargo test -p greytl-sink --test sink_protocol`
-- `cargo test -p greytl-cli --test run`
+- `cargo test -p iceflow-state --test recovery`
+- `cargo test -p iceflow-sink --test sink_protocol`
+- `cargo test -p iceflow-cli --test run`
 - `just test-real-stack`
 
 ## Workspace Structure
 
-- `crates/greytl-types`: shared engine vocabulary, manifests, mutation contracts, and reference workload types
-- `crates/greytl-source`: source adapter boundary plus the file-backed reference source
-- `crates/greytl-worker-duckdb`: normalization, Parquet writing, and offline compaction helpers
-- `crates/greytl-state`: SQLite-backed control plane, persisted batch/attempt/checkpoint state, recovery/orphan bookkeeping, and migrations
-- `crates/greytl-sink`: sink protocol plus append-only filesystem/Polaris implementations and test-double coverage; real filesystem and Polaris sinks are append-only only today, while keyed-upsert has planning/test-double coverage
-- `crates/greytl-runtime`: intake gating, backpressure, failpoints, and checkpoint sequencing
-- `crates/greytl-cli`: operator-facing `run` and `compact` command wiring; `compact` is append-only only today
+- `crates/iceflow-types`: shared engine vocabulary, manifests, mutation contracts, and reference workload types
+- `crates/iceflow-source`: source adapter boundary plus the file-backed reference source
+- `crates/iceflow-worker-duckdb`: normalization, Parquet writing, and offline compaction helpers
+- `crates/iceflow-state`: SQLite-backed control plane, persisted batch/attempt/checkpoint state, recovery/orphan bookkeeping, and migrations
+- `crates/iceflow-sink`: sink protocol plus append-only filesystem/Polaris implementations and test-double coverage; real filesystem and Polaris sinks are append-only only today, while keyed-upsert has planning/test-double coverage
+- `crates/iceflow-runtime`: intake gating, backpressure, failpoints, and checkpoint sequencing
+- `crates/iceflow-cli`: operator-facing `run` and `compact` command wiring; `compact` is append-only only today
 - `fixtures/reference_workload_v0/`: checked-in deterministic workloads used by the file source and tests
 - `infra/local/`: local Polaris and object-store stack for real-stack testing
 - `docs/contributing/`: deeper contributor and per-crate guides
 
 ## Where To Look
 
-- Domain model, IDs, manifests, or schema policy: start with `crates/greytl-types` and `docs/contributing/crates/greytl-types.md`
-- Source contracts or fixture playback: start with `crates/greytl-source` and `docs/contributing/crates/greytl-source.md`
-- Batch normalization, Parquet output, or rewrite-kernel changes: start with `crates/greytl-worker-duckdb` and `docs/contributing/crates/greytl-worker-duckdb.md`
-- Offline compaction, compaction catalog/history, or rewrite selection: start with `crates/greytl-cli` and `docs/contributing/crates/greytl-cli.md`
-- Batch registration, commit attempts, recovery, or checkpoint durability: start with `crates/greytl-state` and `docs/contributing/crates/greytl-state.md`
-- Commit semantics, idempotency, filesystem sink, or Polaris sink: start with `crates/greytl-sink` and `docs/contributing/crates/greytl-sink.md`
-- Admission control, backpressure, or checkpoint blocking: start with `crates/greytl-runtime` and `docs/contributing/crates/greytl-runtime.md`
-- Command wiring or end-to-end local execution: start with `crates/greytl-cli` and `docs/contributing/crates/greytl-cli.md`
-- Reference workload JSONL, fixture naming, or workload routing: start with `fixtures/reference_workload_v0/`, then update `crates/greytl-source`, `crates/greytl-cli/src/commands/run.rs`, `crates/greytl-types/src/reference_workload.rs`, and `benchmarks/pyiceberg_baseline/` when workload names or fixture routing change
+- Domain model, IDs, manifests, or schema policy: start with `crates/iceflow-types` and `docs/contributing/crates/iceflow-types.md`
+- Source contracts or fixture playback: start with `crates/iceflow-source` and `docs/contributing/crates/iceflow-source.md`
+- Batch normalization, Parquet output, or rewrite-kernel changes: start with `crates/iceflow-worker-duckdb` and `docs/contributing/crates/iceflow-worker-duckdb.md`
+- Offline compaction, compaction catalog/history, or rewrite selection: start with `crates/iceflow-cli` and `docs/contributing/crates/iceflow-cli.md`
+- Batch registration, commit attempts, recovery, or checkpoint durability: start with `crates/iceflow-state` and `docs/contributing/crates/iceflow-state.md`
+- Commit semantics, idempotency, filesystem sink, or Polaris sink: start with `crates/iceflow-sink` and `docs/contributing/crates/iceflow-sink.md`
+- Admission control, backpressure, or checkpoint blocking: start with `crates/iceflow-runtime` and `docs/contributing/crates/iceflow-runtime.md`
+- Command wiring or end-to-end local execution: start with `crates/iceflow-cli` and `docs/contributing/crates/iceflow-cli.md`
+- Reference workload JSONL, fixture naming, or workload routing: start with `fixtures/reference_workload_v0/`, then update `crates/iceflow-source`, `crates/iceflow-cli/src/commands/run.rs`, `crates/iceflow-types/src/reference_workload.rs`, and `benchmarks/pyiceberg_baseline/` when workload names or fixture routing change
 - Local stack bootstrap, Polaris sandbox wiring, or object-store setup: start with `infra/local/` and the stack commands in `justfile`
 - Polaris-backed CLI flows: assume unauthenticated endpoints unless the relevant guide says otherwise
 
 ## Contributor Guides
 
 - `docs/contributing/README.md`
-- `docs/contributing/crates/greytl-types.md`
-- `docs/contributing/crates/greytl-source.md`
-- `docs/contributing/crates/greytl-worker-duckdb.md`
-- `docs/contributing/crates/greytl-state.md`
-- `docs/contributing/crates/greytl-sink.md`
-- `docs/contributing/crates/greytl-runtime.md`
-- `docs/contributing/crates/greytl-cli.md`
+- `docs/contributing/crates/iceflow-types.md`
+- `docs/contributing/crates/iceflow-source.md`
+- `docs/contributing/crates/iceflow-worker-duckdb.md`
+- `docs/contributing/crates/iceflow-state.md`
+- `docs/contributing/crates/iceflow-sink.md`
+- `docs/contributing/crates/iceflow-runtime.md`
+- `docs/contributing/crates/iceflow-cli.md`
 
 ## Delegation Preference
 
@@ -68,7 +68,7 @@ Use this file as the repo-level routing map. Once you know which crate you are c
 
 ## Rust Rules
 
-Apply the managed ECC Rust guidance when working in this repo's Rust code.
+Apply the managed ECC Rust guidance when working in this repo's Rust code. These can be found in /.claude/
 
 Primary ECC skills:
 - `rust-patterns` for Rust implementation, review, refactors, and crate/module design

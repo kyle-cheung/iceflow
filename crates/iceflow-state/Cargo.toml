@@ -1,0 +1,9 @@
+[package]
+name = "iceflow-state"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { path = "../anyhow" }
+chrono = { path = "../chrono" }
+iceflow-types = { path = "../iceflow-types" }

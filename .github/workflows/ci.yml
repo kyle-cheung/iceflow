@@ -53,7 +53,7 @@ jobs:
           POLARIS_NAMESPACE="${POLARIS_NAMESPACE}" \
           POLARIS_CLIENT_ID="${POLARIS_ROOT_CLIENT_ID}" \
           POLARIS_CLIENT_SECRET="${POLARIS_ROOT_CLIENT_SECRET}" \
-          cargo test -p greytl-sink real_stack_ -- --ignored
+          cargo test -p iceflow-sink real_stack_ -- --ignored
       - name: Stop local Polaris stack
         if: always()
         run: docker compose --env-file infra/local/.env -f infra/local/docker-compose.yml down -v

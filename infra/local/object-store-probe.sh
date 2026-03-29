@@ -18,11 +18,11 @@ EOF
 export AWS_CONFIG_FILE="${aws_config_dir}/config"
 export AWS_EC2_METADATA_DISABLED=true
 
-probe_key="_greytl_probe/raw-s3.txt"
+probe_key="_iceflow_probe/raw-s3.txt"
 probe_body="$(mktemp)"
 probe_copy="$(mktemp)"
 trap 'rm -rf "$aws_config_dir" "$probe_body" "$probe_copy"' EXIT
-printf 'greytl object store probe\n' > "$probe_body"
+printf 'iceflow object store probe\n' > "$probe_body"
 
 aws --endpoint-url "${OBJECT_STORE_ENDPOINT}" s3api put-object \
   --bucket "${OBJECT_STORE_BUCKET}" \
@@ -38,7 +38,7 @@ cmp -s "${probe_body}" "${probe_copy}"
 
 aws --endpoint-url "${OBJECT_STORE_ENDPOINT}" s3api list-objects-v2 \
   --bucket "${OBJECT_STORE_BUCKET}" \
-  --prefix "_greytl_probe/" | grep -q "\"Key\": \"${probe_key}\""
+  --prefix "_iceflow_probe/" | grep -q "\"Key\": \"${probe_key}\""
 
 aws --endpoint-url "${OBJECT_STORE_ENDPOINT}" s3api delete-object \
   --bucket "${OBJECT_STORE_BUCKET}" \
@@ -46,5 +46,5 @@ aws --endpoint-url "${OBJECT_STORE_ENDPOINT}" s3api delete-object \
 
 deleted_listing="$(aws --endpoint-url "${OBJECT_STORE_ENDPOINT}" s3api list-objects-v2 \
   --bucket "${OBJECT_STORE_BUCKET}" \
-  --prefix "_greytl_probe/")"
+  --prefix "_iceflow_probe/")"
 ! printf '%s' "${deleted_listing}" | grep -q "\"Key\": \"${probe_key}\""
