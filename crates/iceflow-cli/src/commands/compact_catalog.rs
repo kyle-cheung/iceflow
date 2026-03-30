@@ -109,7 +109,7 @@ impl CompactionCatalog for PolarisCompactionCatalog {
     }
 
     fn snapshot_dir(&self, table_root: &Path) -> PathBuf {
-        table_root.join("_greytl_snapshots")
+        table_root.join("_iceflow_snapshots")
     }
 }
 

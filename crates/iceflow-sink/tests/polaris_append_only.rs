@@ -55,7 +55,7 @@ fn polaris_append_only_commit_is_recorded_in_namespace_properties() -> Result<()
             .namespace_properties("orders_events")
             .unwrap()
             .keys()
-            .any(|key| key.contains("greytl.commit")));
+            .any(|key| key.contains("iceflow.commit")));
         Ok(())
     })
 }

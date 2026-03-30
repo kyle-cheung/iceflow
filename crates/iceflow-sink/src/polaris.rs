@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const COMMIT_PREFIX: &str = "greytl.commit.";
+const COMMIT_PREFIX: &str = "iceflow.commit.";
 
 #[derive(Debug, Clone)]
 pub struct PolarisSink {
@@ -248,7 +248,7 @@ impl PolarisSink {
     }
 
     fn snapshots_dir(&self) -> Result<PathBuf> {
-        Ok(self.destination_root()?.join("_greytl_snapshots"))
+        Ok(self.destination_root()?.join("_iceflow_snapshots"))
     }
 
     fn snapshot_path(&self, snapshot_id: &str) -> Result<PathBuf> {
