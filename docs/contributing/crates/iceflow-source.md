@@ -1,0 +1,51 @@
+# iceflow-source
+
+## Purpose
+
+`iceflow-source` owns the source adapter boundary and the deterministic file-backed reference source used by local runs and tests. It turns checked-in workload fixtures into ordered `SourceBatch` values and accepts and validates checkpoint acknowledgements.
+
+## Owns
+
+- the `SourceAdapter` trait and request/response types
+- source discovery, spec, snapshot, and checkpoint APIs
+- the reference `FileSource` implementation
+- deterministic batch indexing over the fixture workload
+- JSONL fixture playback into `SourceBatch` values
+
+## Key Files
+
+- `crates/iceflow-source/src/adapter.rs`
+- `crates/iceflow-source/src/file_source.rs`
+- `crates/iceflow-source/tests/source_adapter.rs`
+
+### Related Crates
+
+- `crates/iceflow-cli/src/commands/run.rs` — CLI wiring that exercises the source adapter
+- `fixtures/reference_workload_v0/`
+
+## Change Here When
+
+- the source trait changes
+- source batches need new metadata or checkpoint behavior
+- supported workloads change in the CLI or source path
+- the file-backed reference source needs to map fixture files differently
+- a source-facing regression appears in `run` or end-to-end fixture playback
+- `FileSource` should infer different `table_mode` or `source_class` values from fixture directory names
+
+## Avoid
+
+- pushing normalization or Parquet-writing logic into this crate
+- making the reference source non-deterministic
+- leaking sink or state-store concerns into the source interface
+
+## Tests To Run
+
+- `cargo test -p iceflow-source`
+- `cargo test -p iceflow-source --test source_adapter`
+- `just test-fast`
+
+## Related Crates
+
+- `iceflow-types` defines the shared batch and mutation vocabulary used here
+- `iceflow-worker-duckdb` consumes `SourceBatch` output from this crate
+- `iceflow-cli` wires `FileSource` into the `run` command

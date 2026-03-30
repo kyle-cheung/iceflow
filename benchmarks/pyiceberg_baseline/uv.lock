@@ -230,7 +230,7 @@ wheels = [
 ]
 
 [[package]]
-name = "greytl-pyiceberg-baseline"
+name = "iceflow-pyiceberg-baseline"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

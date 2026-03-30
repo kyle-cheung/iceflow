@@ -1,8 +1,8 @@
 set shell := ["sh", "-eu", "-c"]
 
 test-fast:
-    cargo test -p greytl-types
-    cargo test -p greytl-source --test source_adapter
+    cargo test -p iceflow-types
+    cargo test -p iceflow-source --test source_adapter
 
 stack-config:
     test -f infra/local/.env || cp infra/local/.env.example infra/local/.env
@@ -23,11 +23,11 @@ test-local-object-store:
 
 test-real-stack:
     test -f infra/local/.env || cp infra/local/.env.example infra/local/.env
-    . infra/local/.env && POLARIS_CATALOG_URI="http://127.0.0.1:${POLARIS_API_PORT}/api/catalog" POLARIS_CATALOG_NAME="${POLARIS_CATALOG_NAME}" POLARIS_NAMESPACE="${POLARIS_NAMESPACE}" POLARIS_CLIENT_ID="${POLARIS_ROOT_CLIENT_ID}" POLARIS_CLIENT_SECRET="${POLARIS_ROOT_CLIENT_SECRET}" cargo test -p greytl-sink real_stack_ -- --ignored
+    . infra/local/.env && POLARIS_CATALOG_URI="http://127.0.0.1:${POLARIS_API_PORT}/api/catalog" POLARIS_CATALOG_NAME="${POLARIS_CATALOG_NAME}" POLARIS_NAMESPACE="${POLARIS_NAMESPACE}" POLARIS_CLIENT_ID="${POLARIS_ROOT_CLIENT_ID}" POLARIS_CLIENT_SECRET="${POLARIS_ROOT_CLIENT_SECRET}" cargo test -p iceflow-sink real_stack_ -- --ignored
 
 test-compact:
-    cargo test -p greytl-worker-duckdb compact_parquet_files_merges_small_inputs_into_one_output
-    cargo test -p greytl-cli --test compact
+    cargo test -p iceflow-worker-duckdb compact_parquet_files_merges_small_inputs_into_one_output
+    cargo test -p iceflow-cli --test compact
 
 benchmark-baseline *args:
     test -f infra/local/.env || cp infra/local/.env.example infra/local/.env
@@ -36,5 +36,5 @@ benchmark-baseline *args:
       OBJECT_STORE_ENDPOINT="${OBJECT_STORE_ENDPOINT:-http://127.0.0.1:${OBJECT_STORE_API_PORT:-${MINIO_API_PORT:-9000}}}" \
       OBJECT_STORE_ACCESS_KEY="${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}" \
       OBJECT_STORE_SECRET_KEY="${OBJECT_STORE_SECRET_KEY:-rustfsadmin}" \
-      OBJECT_STORE_BUCKET="${OBJECT_STORE_BUCKET:-${MINIO_BUCKET:-greytl-warehouse}}" \
+      OBJECT_STORE_BUCKET="${OBJECT_STORE_BUCKET:-${MINIO_BUCKET:-iceflow-warehouse}}" \
       uv run --project benchmarks/pyiceberg_baseline python -m benchmarks.pyiceberg_baseline.run {{args}}

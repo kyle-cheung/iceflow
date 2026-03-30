@@ -24,34 +24,34 @@ source adapter → Arrow batch → normalize/write worker → Parquet batch + ma
 
 | Crate | What it owns | Where it sits in the flow |
 |---|---|---|
-| `greytl-types` | Shared domain model: table IDs, logical mutations, manifests, schema policy, reference workload descriptors | Used everywhere; this is the vocabulary the rest of the system agrees on |
-| `greytl-source` | Source adapter trait plus the deterministic file-based reference source | Produces `SourceBatch` values from the fixture/reference workload |
-| `greytl-worker-duckdb` | Normalize records, enforce ordering rules, and materialize landed Parquet + batch manifest | Turns a source batch into the durable replay boundary |
-| `greytl-state` | SQLite-backed control plane for batch registration, file tracking, commit attempts, checkpoint linkage, recovery, and quarantine | Records the authoritative lifecycle of a batch before and after sink commits |
-| `greytl-sink` | Sink contract, idempotent commit protocol, commit lookup/recovery APIs, filesystem sink, Polaris sink, and test doubles | Owns the destination-facing write and commit semantics |
-| `greytl-runtime` | In-memory coordinator for table admission, backpressure, durable-pending tracking, and checkpoint gating | Guards when a table may ingest or checkpoint another batch |
-| `greytl-cli` | Thin executable that wires source + worker + state + sink + runtime into runnable commands | Current operator entrypoint for `run` and `compact` |
+| `iceflow-types` | Shared domain model: table IDs, logical mutations, manifests, schema policy, reference workload descriptors | Used everywhere; this is the vocabulary the rest of the system agrees on |
+| `iceflow-source` | Source adapter trait plus the deterministic file-based reference source | Produces `SourceBatch` values from the fixture/reference workload |
+| `iceflow-worker-duckdb` | Normalize records, enforce ordering rules, and materialize landed Parquet + batch manifest | Turns a source batch into the durable replay boundary |
+| `iceflow-state` | SQLite-backed control plane for batch registration, file tracking, commit attempts, checkpoint linkage, recovery, and quarantine | Records the authoritative lifecycle of a batch before and after sink commits |
+| `iceflow-sink` | Sink contract, idempotent commit protocol, commit lookup/recovery APIs, filesystem sink, Polaris sink, and test doubles | Owns the destination-facing write and commit semantics |
+| `iceflow-runtime` | In-memory coordinator for table admission, backpressure, durable-pending tracking, and checkpoint gating | Guards when a table may ingest or checkpoint another batch |
+| `iceflow-cli` | Thin executable that wires source + worker + state + sink + runtime into runnable commands | Current operator entrypoint for `run` and `compact` |
 
 ### How the Crates Fit Together
 
 The pipeline is intentionally split so each crate owns one boundary:
 
-1. `greytl-source` reads the next snapshot for a source table and returns a `SourceBatch`.
-2. `greytl-worker-duckdb` normalizes that batch into engine-shaped rows and writes landed Parquet plus a deterministic manifest.
-3. `greytl-state` registers the manifest, records the written files, opens a commit attempt, and later records the resolved outcome plus checkpoint linkage.
-4. `greytl-sink` prepares and commits the batch into the destination, with lookup and recovery hooks for uncertain outcomes.
-5. `greytl-runtime` decides whether a table can admit more work and whether checkpoint advancement is still blocked.
-6. `greytl-cli` orchestrates the whole sequence for local runs and offline maintenance tasks.
+1. `iceflow-source` reads the next snapshot for a source table and returns a `SourceBatch`.
+2. `iceflow-worker-duckdb` normalizes that batch into engine-shaped rows and writes landed Parquet plus a deterministic manifest.
+3. `iceflow-state` registers the manifest, records the written files, opens a commit attempt, and later records the resolved outcome plus checkpoint linkage.
+4. `iceflow-sink` prepares and commits the batch into the destination, with lookup and recovery hooks for uncertain outcomes.
+5. `iceflow-runtime` decides whether a table can admit more work and whether checkpoint advancement is still blocked.
+6. `iceflow-cli` orchestrates the whole sequence for local runs and offline maintenance tasks.
 
 Said another way:
 
-- `greytl-types` defines the nouns
-- `greytl-source` produces batches
-- `greytl-worker-duckdb` turns batches into replayable files
-- `greytl-state` remembers what happened
-- `greytl-sink` makes destination changes durable
-- `greytl-runtime` enforces sequencing
-- `greytl-cli` is the operator-facing wrapper around all of it
+- `iceflow-types` defines the nouns
+- `iceflow-source` produces batches
+- `iceflow-worker-duckdb` turns batches into replayable files
+- `iceflow-state` remembers what happened
+- `iceflow-sink` makes destination changes durable
+- `iceflow-runtime` enforces sequencing
+- `iceflow-cli` is the operator-facing wrapper around all of it
 
 ### Repo Layout
 
@@ -122,18 +122,18 @@ just test-compact
 
 ### Run
 
-The current executable crate is `greytl-cli`.
+The current executable crate is `iceflow-cli`.
 
 During development, run it with Cargo:
 
 ```sh
-cargo run -p greytl-cli -- run ...
+cargo run -p iceflow-cli -- run ...
 ```
 
-After building, the binary is `greytl-cli` in `target/debug/` or `target/release/`.
+After building, the binary is `iceflow-cli` in `target/debug/` or `target/release/`.
 
 ```sh
-./target/debug/greytl-cli run ...
+./target/debug/iceflow-cli run ...
 ```
 
 The CLI currently exposes two subcommands:
@@ -141,7 +141,7 @@ The CLI currently exposes two subcommands:
 - `run`: execute a reference workload end to end through source → worker → state → sink
 - `compact`: run offline append-only file compaction against an existing table layout
 
-Unlike a typical Clap-based CLI, `greytl-cli --help` is not implemented yet. Treat the README examples below as the current command contract.
+Unlike a typical Clap-based CLI, `iceflow-cli --help` is not implemented yet. Treat the README examples below as the current command contract.
 
 #### `run`
 
@@ -160,15 +160,15 @@ Optional:
 
 ```sh
 # Run the append-only reference workload to a local filesystem destination
-cargo run -p greytl-cli -- run \
+cargo run -p iceflow-cli -- run \
   --workload append_only.orders_events \
-  --destination-uri file:///tmp/greytl-demo \
+  --destination-uri file:///tmp/iceflow-demo \
   --sink filesystem
 
 # Run the same workload against Polaris
-cargo run -p greytl-cli -- run \
+cargo run -p iceflow-cli -- run \
   --workload append_only.orders_events \
-  --destination-uri file:///tmp/greytl-demo \
+  --destination-uri file:///tmp/iceflow-demo \
   --sink polaris \
   --catalog-uri http://127.0.0.1:8181/api/catalog \
   --catalog quickstart_catalog \
@@ -177,11 +177,11 @@ cargo run -p greytl-cli -- run \
 
 What `run` does internally:
 
-- loads the workload through `greytl-source::FileSource`
-- materializes each batch through `greytl-worker-duckdb::DuckDbWorker`
-- records batch/commit/checkpoint state in `greytl-state::SqliteStateStore`
-- commits through either `greytl-sink::FilesystemSink` or `greytl-sink::PolarisSink`
-- uses `greytl-runtime::RuntimeCoordinator` to gate intake and checkpoint advancement
+- loads the workload through `iceflow-source::FileSource`
+- materializes each batch through `iceflow-worker-duckdb::DuckDbWorker`
+- records batch/commit/checkpoint state in `iceflow-state::SqliteStateStore`
+- commits through either `iceflow-sink::FilesystemSink` or `iceflow-sink::PolarisSink`
+- uses `iceflow-runtime::RuntimeCoordinator` to gate intake and checkpoint advancement
 
 #### `compact`
 
@@ -204,8 +204,8 @@ Current limitation:
 
 ```sh
 # Offline compaction
-cargo run -p greytl-cli -- compact \
-  --warehouse-uri file:///tmp/greytl-demo \
+cargo run -p iceflow-cli -- compact \
+  --warehouse-uri file:///tmp/iceflow-demo \
   --catalog-uri http://127.0.0.1:8181/api/catalog \
   --catalog demo \
   --namespace orders_events \
@@ -237,7 +237,7 @@ just stack-down
 
 `infra/local/.env.example` is the source template for local runs. The `just` recipes copy it to `infra/local/.env` if needed and export the Polaris/object-store settings expected by the Rust tests and Python benchmark harness.
 
-Current `infra/local` uses RustFS as the default local S3-compatible backend. That is local-stack scaffolding, not a core runtime dependency. The local object-store probe validates Polaris bootstrap plus raw path-style access, but the current Polaris sink path still stages committed files into a local `file://` warehouse rather than proving end-to-end greytl data-file writes through that S3-compatible store. Production guidance remains direct cloud object storage, especially AWS S3. The current local-stack path does not rely on presigned URLs.
+Current `infra/local` uses RustFS as the default local S3-compatible backend. That is local-stack scaffolding, not a core runtime dependency. The local object-store probe validates Polaris bootstrap plus raw path-style access, but the current Polaris sink path still stages committed files into a local `file://` warehouse rather than proving end-to-end iceflow data-file writes through that S3-compatible store. Production guidance remains direct cloud object storage, especially AWS S3. The current local-stack path does not rely on presigned URLs.
 
 ### Benchmarks
 

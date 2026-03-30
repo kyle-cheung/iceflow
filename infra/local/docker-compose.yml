@@ -31,7 +31,7 @@ services:
       AWS_ACCESS_KEY_ID: ${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}
       AWS_SECRET_ACCESS_KEY: ${OBJECT_STORE_SECRET_KEY:-rustfsadmin}
       AWS_DEFAULT_REGION: us-west-2
-      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-greytl-warehouse}
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-iceflow-warehouse}
       OBJECT_STORE_ENDPOINT: http://object-store:9000
     volumes:
       - ../..:/workspace
@@ -50,7 +50,7 @@ services:
       AWS_ACCESS_KEY_ID: ${OBJECT_STORE_ACCESS_KEY:-rustfsadmin}
       AWS_SECRET_ACCESS_KEY: ${OBJECT_STORE_SECRET_KEY:-rustfsadmin}
       AWS_DEFAULT_REGION: us-west-2
-      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-greytl-warehouse}
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-iceflow-warehouse}
       OBJECT_STORE_ENDPOINT: http://object-store:9000
     volumes:
       - ../..:/workspace
@@ -89,7 +89,7 @@ services:
       POLARIS_ROOT_CLIENT_ID: ${POLARIS_ROOT_CLIENT_ID}
       POLARIS_ROOT_CLIENT_SECRET: ${POLARIS_ROOT_CLIENT_SECRET}
       POLARIS_CATALOG_NAME: ${POLARIS_CATALOG_NAME:-quickstart_catalog}
-      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-greytl-warehouse}
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-iceflow-warehouse}
       OBJECT_STORE_API_PORT: ${OBJECT_STORE_API_PORT:-9000}
     volumes:
       - ../..:/workspace

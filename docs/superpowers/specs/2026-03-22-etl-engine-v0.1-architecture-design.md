@@ -563,8 +563,8 @@ Tier 2, real catalog and object-store integration tests:
 - local catalog target where possible
 - v0 reference stack is Polaris plus a local S3-compatible object store plus SQLite state store
 - the current `infra/local` default uses RustFS, but that provider choice is a replaceable local-stack detail rather than a normative architecture dependency
-- the RustFS gate currently proves local object-store bootstrap, raw S3 path-style compatibility, and Polaris catalog wiring; it does not yet prove end-to-end greytl data-file writes through the S3-compatible store because the current Polaris sink path still stages committed files into a local `file://` warehouse
-- Task 8b audited `crates/greytl-sink/src/polaris.rs` and `infra/local/polaris-bootstrap.sh` and found no presigned URL path in the current reference stack, so presigned URL verification is excluded from the RustFS gate
+- the RustFS gate currently proves local object-store bootstrap, raw S3 path-style compatibility, and Polaris catalog wiring; it does not yet prove end-to-end iceflow data-file writes through the S3-compatible store because the current Polaris sink path still stages committed files into a local `file://` warehouse
+- Task 8b audited `crates/iceflow-sink/src/polaris.rs` and `infra/local/polaris-bootstrap.sh` and found no presigned URL path in the current reference stack, so presigned URL verification is excluded from the RustFS gate
 - reuse the same fixtures and expected outcomes as Tier 1
 - required contract coverage:
   - sink and commit protocol behavior against the real catalog

@@ -6,7 +6,7 @@ Status: Accepted
 
 ## 1. Purpose
 
-This document defines the post-v0 direction for widening `greytl` from a deterministic file-backed reference source to a general source SDK that can support real database CDC and other source classes without forcing changes into the worker, state-store, runtime, or sink cores.
+This document defines the post-v0 direction for widening `iceflow` from a deterministic file-backed reference source to a general source SDK that can support real database CDC and other source classes without forcing changes into the worker, state-store, runtime, or sink cores.
 
 The immediate goal is not to implement a Postgres connector next. The goal is to pin the architectural contract that future source work should follow now that Task 10 and the narrowed v0 closeout work are complete.
 
@@ -38,12 +38,12 @@ This spec therefore defines the target contract and sequencing constraints for p
 
 Today the source layer is intentionally narrow:
 
-- `greytl-types` defines the canonical mutation model in `LogicalMutation`
-- `greytl-source` exports one concrete source: `FileSource`
-- `greytl-cli run` always uses `FileSource` and built-in fixture workloads
+- `iceflow-types` defines the canonical mutation model in `LogicalMutation`
+- `iceflow-source` exports one concrete source: `FileSource`
+- `iceflow-cli run` always uses `FileSource` and built-in fixture workloads
 - the rest of the engine already reasons in replayable batches, commit attempts, and checkpoint advancement
 
-This is the right narrowed v0 shape. The main architectural issue is not the existence of a source trait. The issue is that the current shared source types in `crates/greytl-source/src/adapter.rs` leak file-fixture assumptions into the generic interface:
+This is the right narrowed v0 shape. The main architectural issue is not the existence of a source trait. The issue is that the current shared source types in `crates/iceflow-source/src/adapter.rs` leak file-fixture assumptions into the generic interface:
 
 - `fixture_dir`
 - `batch_count`
@@ -74,7 +74,7 @@ Those fields and names are valid for `FileSource`, but they are not a durable co
 
 ## 6. Baseline Architectural Decision
 
-The canonical cross-source contract remains `LogicalMutation` in `greytl-types`.
+The canonical cross-source contract remains `LogicalMutation` in `iceflow-types`.
 
 That choice is correct for the next phase because it already captures the source invariants the rest of the engine needs:
 
@@ -96,10 +96,10 @@ The engine-facing source API remains batch-oriented.
 
 That means:
 
-- `greytl-runtime` still admits and sequences work in batches
-- `greytl-worker-duckdb` still receives `SourceBatch` values
-- `greytl-state` still links durable destination commits to source checkpoint advancement
-- `greytl-sink` remains destination-only and source-agnostic
+- `iceflow-runtime` still admits and sequences work in batches
+- `iceflow-worker-duckdb` still receives `SourceBatch` values
+- `iceflow-state` still links durable destination commits to source checkpoint advancement
+- `iceflow-sink` remains destination-only and source-agnostic
 
 Push-native connectors such as Postgres logical replication should hide their push mechanics behind connector-owned buffering and expose drained batches to the runtime. The core engine should not grow source-specific callbacks or push-driven orchestration.
 
@@ -203,7 +203,7 @@ pub trait SourceAdapter {
 
 The source checkpoint token is connector-owned and opaque to the engine.
 
-The core engine may store it, persist which checkpoint has become durable, and hand it back to the connector for resume. It must not hardcode Postgres LSN structure, MongoDB resume token semantics, or SQL Server CDC details into `greytl-runtime`, `greytl-state`, or `greytl-sink`.
+The core engine may store it, persist which checkpoint has become durable, and hand it back to the connector for resume. It must not hardcode Postgres LSN structure, MongoDB resume token semantics, or SQL Server CDC details into `iceflow-runtime`, `iceflow-state`, or `iceflow-sink`.
 
 The required invariants are:
 
@@ -265,7 +265,7 @@ The real acceptance criteria are:
 - `P4`: any replay overlap is deliberate and safe
 - `P5`: ordering is stable enough for `keyed_upsert`, effectively log position plus intra-transaction sequence
 - `P6`: restart from the last durable checkpoint is deterministic
-- `P7`: checkpoint advancement only occurs after destination commit resolution is durable in `greytl-state`
+- `P7`: checkpoint advancement only occurs after destination commit resolution is durable in `iceflow-state`
 - `P8`: crash recovery can resume from control-plane state plus connector checkpoint without manual intervention
 
 The hardest correctness milestone is the snapshot-to-CDC handoff, not the initial database read.
@@ -274,7 +274,7 @@ The hardest correctness milestone is the snapshot-to-CDC handoff, not the initia
 
 Recommended sequence:
 
-1. Generalize `greytl-source` shared types and trait to remove fixture-specific assumptions.
+1. Generalize `iceflow-source` shared types and trait to remove fixture-specific assumptions.
 2. Port the current `FileSource` implementation onto the new source contract without changing behavior.
 3. Add a Postgres snapshot or full-refresh connector to prove the generalized source boundary against a live database.
 4. Add Postgres CDC with explicit validation of snapshot-to-CDC handoff, durable checkpointing, restart behavior, and replay safety.

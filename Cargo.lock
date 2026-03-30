@@ -240,85 +240,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "greytl-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "greytl-runtime",
- "greytl-sink",
- "greytl-source",
- "greytl-state",
- "greytl-types",
- "greytl-worker-duckdb",
- "reqwest",
- "serde",
- "serde_json 1.0.149",
-]
-
-[[package]]
-name = "greytl-runtime"
-version = "0.1.0"
-dependencies = [
- "greytl-types",
-]
-
-[[package]]
-name = "greytl-sink"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "greytl-source",
- "greytl-state",
- "greytl-types",
- "greytl-worker-duckdb",
- "reqwest",
- "serde",
- "serde_json 0.1.0",
- "serde_json 1.0.149",
-]
-
-[[package]]
-name = "greytl-source"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "greytl-types",
- "serde_json 0.1.0",
-]
-
-[[package]]
-name = "greytl-state"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "greytl-types",
-]
-
-[[package]]
-name = "greytl-types"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "serde_json 0.1.0",
-]
-
-[[package]]
-name = "greytl-worker-duckdb"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "greytl-source",
- "greytl-types",
- "libduckdb-sys",
- "serde_json 0.1.0",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -422,6 +343,85 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "iceflow-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "iceflow-runtime",
+ "iceflow-sink",
+ "iceflow-source",
+ "iceflow-state",
+ "iceflow-types",
+ "iceflow-worker-duckdb",
+ "reqwest",
+ "serde",
+ "serde_json 1.0.149",
+]
+
+[[package]]
+name = "iceflow-runtime"
+version = "0.1.0"
+dependencies = [
+ "iceflow-types",
+]
+
+[[package]]
+name = "iceflow-sink"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "iceflow-source",
+ "iceflow-state",
+ "iceflow-types",
+ "iceflow-worker-duckdb",
+ "reqwest",
+ "serde",
+ "serde_json 0.1.0",
+ "serde_json 1.0.149",
+]
+
+[[package]]
+name = "iceflow-source"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "iceflow-types",
+ "serde_json 0.1.0",
+]
+
+[[package]]
+name = "iceflow-state"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "iceflow-types",
+]
+
+[[package]]
+name = "iceflow-types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde_json 0.1.0",
+]
+
+[[package]]
+name = "iceflow-worker-duckdb"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "iceflow-source",
+ "iceflow-types",
+ "libduckdb-sys",
+ "serde_json 0.1.0",
 ]
 
 [[package]]

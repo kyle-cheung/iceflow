@@ -1,7 +1,7 @@
 [project]
-name = "greytl-pyiceberg-baseline"
+name = "iceflow-pyiceberg-baseline"
 version = "0.1.0"
-description = "PyIceberg baseline benchmark harness for greytl"
+description = "PyIceberg baseline benchmark harness for iceflow"
 requires-python = ">=3.9"
 dependencies = [
     "pyarrow>=18.0.0",

@@ -1,0 +1,12 @@
+[package]
+name = "iceflow-worker-duckdb"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { path = "../anyhow" }
+chrono = { path = "../chrono" }
+iceflow-source = { path = "../iceflow-source" }
+iceflow-types = { path = "../iceflow-types" }
+libduckdb-sys = { version = "1.10501.0", default-features = false, features = ["bundled", "parquet"] }
+serde_json = { path = "../serde_json" }

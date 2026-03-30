@@ -5,13 +5,13 @@ These items do not block the first-pass `G1` baseline harness itself, but they s
 ## Deferred Reviewer Gate Cleanup
 
 - The strict reviewer workflow currently stops before diff review if it runs `cargo clippy --workspace --all-targets -- -D warnings`.
-- That workspace-wide clippy gate is still blocked by pre-existing `clippy::too_many_arguments` findings in `crates/greytl-types/src/mutation.rs`.
+- That workspace-wide clippy gate is still blocked by pre-existing `clippy::too_many_arguments` findings in `crates/iceflow-types/src/mutation.rs`.
 - The current failures are at:
-  - `crates/greytl-types/src/mutation.rs:175`
-  - `crates/greytl-types/src/mutation.rs:247`
-  - `crates/greytl-types/src/mutation.rs:275`
-  - `crates/greytl-types/src/mutation.rs:302`
-  - `crates/greytl-types/src/mutation.rs:329`
+  - `crates/iceflow-types/src/mutation.rs:175`
+  - `crates/iceflow-types/src/mutation.rs:247`
+  - `crates/iceflow-types/src/mutation.rs:275`
+  - `crates/iceflow-types/src/mutation.rs:302`
+  - `crates/iceflow-types/src/mutation.rs:329`
 - This lint debt predates Task 10, but it prevented the automated reviewer from reaching the benchmark harness diff.
 - If strict workspace review is the desired default, fix or explicitly waive this clippy debt in a separate cleanup change.
 

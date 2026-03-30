@@ -3,13 +3,13 @@ members = [
     "crates/anyhow",
     "crates/chrono",
     "crates/serde_json",
-    "crates/greytl-types",
-    "crates/greytl-state",
-    "crates/greytl-source",
-    "crates/greytl-worker-duckdb",
-    "crates/greytl-sink",
-    "crates/greytl-runtime",
-    "crates/greytl-cli",
+    "crates/iceflow-types",
+    "crates/iceflow-state",
+    "crates/iceflow-source",
+    "crates/iceflow-worker-duckdb",
+    "crates/iceflow-sink",
+    "crates/iceflow-runtime",
+    "crates/iceflow-cli",
 ]
 resolver = "2"
 

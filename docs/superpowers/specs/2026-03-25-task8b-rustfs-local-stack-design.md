@@ -18,7 +18,7 @@ The goal is not to broaden the runtime architecture. The goal is to:
 
 - no provider matrix in this task
 - no production-path change away from direct cloud object storage guidance
-- no changes in `greytl-sink`, runtime, worker, or state crates to accommodate RustFS
+- no changes in `iceflow-sink`, runtime, worker, or state crates to accommodate RustFS
 - no parallel SeaweedFS spike
 - no attempt to prove broad S3 compatibility beyond the Polaris-facing local-stack contract
 
@@ -111,7 +111,7 @@ The following must all be true:
 - the raw S3 compatibility probe passes against the same object-store endpoint, bucket, credentials, and path-style configuration Polaris uses
 - the presigned URL audit is documented with a written finding before RustFS is treated as passing the spike
 - the existing ignored real-stack Polaris smoke tests pass unchanged
-- no changes are required in `greytl-sink`, runtime, worker, or state crates
+- no changes are required in `iceflow-sink`, runtime, worker, or state crates
 
 ### 7.2 Raw S3 Probe Requirement
 
@@ -141,7 +141,7 @@ Task 8b must explicitly audit the current Polaris path in this repo and record w
 
 That audit must inspect at least:
 
-- `crates/greytl-sink/src/polaris.rs`
+- `crates/iceflow-sink/src/polaris.rs`
 - `infra/local/polaris-bootstrap.sh`
 
 The audit must then produce one of two written outcomes:
