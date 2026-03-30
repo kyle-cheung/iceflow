@@ -24,10 +24,6 @@ jobs:
   real-stack:
     runs-on: ubuntu-latest
     env:
-      OBJECT_STORE_IMAGE: ${{ vars.OBJECT_STORE_IMAGE }}
-      OBJECT_STORE_AWS_CLI_IMAGE: ${{ vars.OBJECT_STORE_AWS_CLI_IMAGE }}
-      POLARIS_IMAGE: ${{ vars.POLARIS_IMAGE }}
-      POLARIS_BOOTSTRAP_IMAGE: ${{ vars.POLARIS_BOOTSTRAP_IMAGE }}
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
