@@ -14,10 +14,6 @@ use iceflow_state::{
 };
 use iceflow_types::{BatchId, BatchManifest, TableId, TableMode};
 use iceflow_worker_duckdb::DuckDbWorker;
-use std::future::poll_fn;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::task::Poll;
 use std::time::Duration;
 
 const IDLE_POLL_BACKOFF: Duration = Duration::from_millis(50);
@@ -376,29 +372,9 @@ fn idle_poll_backoff() -> Duration {
 }
 
 async fn idle_backoff_sleep() {
-    let duration = idle_poll_backoff();
-    let completed = Arc::new(AtomicBool::new(false));
-    let started = Arc::new(AtomicBool::new(false));
-
-    poll_fn(|cx| {
-        if completed.load(Ordering::Acquire) {
-            return Poll::Ready(());
-        }
-
-        if !started.swap(true, Ordering::AcqRel) {
-            let completed = Arc::clone(&completed);
-            let waker = cx.waker().clone();
-
-            std::thread::spawn(move || {
-                std::thread::sleep(duration);
-                completed.store(true, Ordering::Release);
-                waker.wake();
-            });
-        }
-
-        Poll::Pending
-    })
-    .await
+    // This CLI uses a single-future custom block_on executor, so sleeping here
+    // only backs off this command's polling loop rather than starving unrelated tasks.
+    std::thread::sleep(idle_poll_backoff());
 }
 
 fn finalize_run_result<T>(run_result: Result<T>, close_result: Result<()>) -> Result<T> {
@@ -477,7 +453,9 @@ mod tests {
     fn idle_backoff_sleep_completes_under_block_on() {
         let started_at = std::time::Instant::now();
         crate::block_on(idle_backoff_sleep());
+        let elapsed = started_at.elapsed();
 
-        assert!(started_at.elapsed() >= idle_poll_backoff());
+        assert!(elapsed >= idle_poll_backoff());
+        assert!(elapsed < idle_poll_backoff() * 2);
     }
 }
