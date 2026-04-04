@@ -129,18 +129,75 @@ fn file_capture_session_resumes_from_checkpoint() -> Result<()> {
 #[test]
 fn file_capture_session_rejects_unknown_resume_checkpoint() {
     let source = FileSource::from_fixture_dir(fixture_dir("orders_events"));
-    let req = OpenCaptureRequest {
+    let mut req = orders_capture_request();
+    req.resume_from = Some(checkpoint("cp-9999"));
+    let err = match block_on(source.open_capture(req)) {
+        Ok(_) => panic!("unknown resume checkpoint should fail"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("resume checkpoint"));
+}
+
+#[test]
+fn file_capture_session_rejects_wrong_table_id() {
+    let source = FileSource::from_fixture_dir(fixture_dir("orders_events"));
+    let mut req = orders_capture_request();
+    req.table.table_id = TableId::new("wrong_table");
+
+    let err = match block_on(source.open_capture(req)) {
+        Ok(_) => panic!("wrong table_id should fail"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("table_id"));
+}
+
+#[test]
+fn file_capture_session_rejects_non_empty_source_schema() {
+    let source = FileSource::from_fixture_dir(fixture_dir("orders_events"));
+    let mut req = orders_capture_request();
+    req.table.source_schema = "public".to_string();
+
+    let err = match block_on(source.open_capture(req)) {
+        Ok(_) => panic!("non-empty source_schema should fail"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("source_schema"));
+}
+
+#[test]
+fn file_capture_session_rejects_wrong_source_table() {
+    let source = FileSource::from_fixture_dir(fixture_dir("orders_events"));
+    let mut req = orders_capture_request();
+    req.table.source_table = "wrong_table".to_string();
+
+    let err = match block_on(source.open_capture(req)) {
+        Ok(_) => panic!("wrong source_table should fail"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("source_table"));
+}
+
+#[test]
+fn file_capture_session_rejects_wrong_table_mode() {
+    let source = FileSource::from_fixture_dir(fixture_dir("orders_events"));
+    let mut req = orders_capture_request();
+    req.table.table_mode = TableMode::KeyedUpsert;
+
+    let err = match block_on(source.open_capture(req)) {
+        Ok(_) => panic!("wrong table_mode should fail"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("table_mode"));
+}
+
+fn orders_capture_request() -> OpenCaptureRequest {
+    OpenCaptureRequest {
         table: SourceTableSelection {
             table_id: TableId::new("orders_events"),
             source_schema: String::new(),
             source_table: "orders_events".to_string(),
             table_mode: TableMode::AppendOnly,
         },
-        resume_from: Some(checkpoint("cp-9999")),
-    };
-    let err = match block_on(source.open_capture(req)) {
-        Ok(_) => panic!("unknown resume checkpoint should fail"),
-        Err(err) => err,
-    };
-    assert!(err.to_string().contains("resume checkpoint"));
+        resume_from: None,
+    }
 }

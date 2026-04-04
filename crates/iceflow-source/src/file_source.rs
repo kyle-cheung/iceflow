@@ -25,9 +25,10 @@ struct FileBatchMeta {
     label: String,
     checkpoint_start: CheckpointId,
     checkpoint_end: CheckpointId,
+    record_count: usize,
 }
 
-pub struct FileCaptureSession {
+pub(crate) struct FileCaptureSession {
     source_id: String,
     table_id: String,
     table_mode: TableMode,
@@ -80,7 +81,7 @@ impl SourceCaptureSession for FileCaptureSession {
             .lock()
             .map_err(|_| Error::msg("checkpoint state lock poisoned"))?;
         if let Some(previous) = last_checkpoint.as_ref() {
-            if ack.checkpoint < previous.clone() {
+            if ack.checkpoint < *previous {
                 return Err(Error::msg("checkpoint regression is not allowed"));
             }
         }
@@ -173,6 +174,7 @@ impl FileSource {
                 label,
                 checkpoint_start,
                 checkpoint_end,
+                record_count: records.len(),
             });
         }
 
@@ -245,18 +247,7 @@ impl SourceAdapter for FileSource {
 
     async fn check(&self) -> Result<SourceCheckReport> {
         let batches = self.scan_batches()?;
-        let mut record_count = 0usize;
-        for batch in &batches {
-            record_count += load_records(
-                &batch.path,
-                &self.source_id,
-                &self.table_id,
-                self.table_mode,
-                self.source_class,
-                &self.ordering_field,
-            )?
-            .len();
-        }
+        let record_count: usize = batches.iter().map(|batch| batch.record_count).sum();
 
         let mut capabilities = BTreeSet::new();
         capabilities.insert(SourceCapability::InitialSnapshot);
