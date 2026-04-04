@@ -1,18 +1,98 @@
 use crate::adapter::{
-    CheckReport, CheckpointAck, DiscoverReport, SnapshotRequest, SourceAdapter, SourceBatch,
-    SourceSpec,
+    SourceAdapter, SourceCapability, SourceCheckReport, SourceSpec,
 };
+use crate::capture::{
+    BatchPoll, BatchRequest, CheckpointAck, OpenCaptureRequest, SourceBatch,
+    SourceCaptureSession, SourceTableSelection,
+};
+use crate::validate_source_spec;
 use anyhow::{Error, Result};
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use iceflow_types::{
     ordering, CheckpointId, LogicalMutation, Operation, SourceClass, StructuredKey, TableId,
     TableMode,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileBatchMeta {
+    path: PathBuf,
+    label: String,
+    checkpoint_start: CheckpointId,
+    checkpoint_end: CheckpointId,
+}
+
+pub struct FileCaptureSession {
+    source_id: String,
+    table_id: String,
+    table_mode: TableMode,
+    source_class: SourceClass,
+    ordering_field: String,
+    batches: Vec<FileBatchMeta>,
+    cursor: usize,
+    last_checkpoint: Arc<Mutex<Option<CheckpointId>>>,
+}
+
+#[async_trait]
+impl SourceCaptureSession for FileCaptureSession {
+    async fn poll_batch(&mut self, _req: BatchRequest) -> Result<BatchPoll> {
+        if self.cursor >= self.batches.len() {
+            return Ok(BatchPoll::Exhausted);
+        }
+
+        let meta = &self.batches[self.cursor];
+        let records = load_records(
+            &meta.path,
+            &self.source_id,
+            &self.table_id,
+            self.table_mode,
+            self.source_class,
+            &self.ordering_field,
+        )?;
+
+        self.cursor += 1;
+        Ok(BatchPoll::Batch(SourceBatch {
+            batch_label: Some(meta.label.clone()),
+            checkpoint_start: Some(meta.checkpoint_start.clone()),
+            checkpoint_end: meta.checkpoint_end.clone(),
+            records,
+        }))
+    }
+
+    async fn checkpoint(&mut self, ack: CheckpointAck) -> Result<()> {
+        if ack.source_id.trim().is_empty() {
+            return Err(Error::msg("checkpoint ack source_id is required"));
+        }
+        if ack.snapshot_uri.trim().is_empty() {
+            return Err(Error::msg("checkpoint ack snapshot uri is required"));
+        }
+        if ack.source_id != self.source_id {
+            return Err(Error::msg("checkpoint ack source_id does not match source"));
+        }
+
+        let mut last_checkpoint = self
+            .last_checkpoint
+            .lock()
+            .map_err(|_| Error::msg("checkpoint state lock poisoned"))?;
+        if let Some(previous) = last_checkpoint.as_ref() {
+            if ack.checkpoint < previous.clone() {
+                return Err(Error::msg("checkpoint regression is not allowed"));
+            }
+        }
+        *last_checkpoint = Some(ack.checkpoint);
+
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FileSource {
@@ -63,137 +143,173 @@ impl FileSource {
         }
     }
 
-    fn spec_sync(&self) -> SourceSpec {
-        SourceSpec {
-            source_id: self.source_id.clone(),
-            fixture_dir: self.fixture_dir_display.clone(),
-            source_class: self.source_class,
-            table_id: self.table_id.clone(),
-            table_mode: self.table_mode,
-            ordering_field: match self.table_mode {
-                TableMode::AppendOnly => None,
-                TableMode::KeyedUpsert => Some(self.ordering_field.clone()),
-            },
-            batch_count: batch_files(&self.fixture_dir).len(),
-        }
-    }
-
-    fn check_sync(&self) -> Result<CheckReport> {
-        let batch_files = batch_files(&self.fixture_dir);
-        let mut record_count = 0;
-        for batch_file in &batch_files {
-            record_count += self.load_batch_file(batch_file)?.records.len();
-        }
-
-        Ok(CheckReport {
-            fixture_dir: self.fixture_dir_display.clone(),
-            batch_count: batch_files.len(),
-            record_count,
-        })
-    }
-
-    fn discover_sync(&self) -> Result<DiscoverReport> {
-        Ok(DiscoverReport {
-            fixture_dir: self.fixture_dir_display.clone(),
-            batch_files: batch_files(&self.fixture_dir)
-                .into_iter()
-                .map(|path| {
-                    path.file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or_default()
-                        .to_string()
-                })
-                .collect(),
-        })
-    }
-
-    fn load_batch_file(&self, batch_file: &Path) -> Result<SourceBatch> {
-        let content = fs::read_to_string(batch_file)
-            .map_err(|err| Error::msg(format!("{}: {err}", batch_file.display())))?;
-        let mut records = Vec::new();
-
-        for (line_no, line) in content.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            let parsed = parse_json_value(line).map_err(|err| {
-                Error::msg(format!("{}:{}: {err}", batch_file.display(), line_no + 1))
-            })?;
-            let record = record_from_value(
+    fn scan_batches(&self) -> Result<Vec<FileBatchMeta>> {
+        let mut batches = Vec::new();
+        for path in batch_files(&self.fixture_dir) {
+            let label = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let records = load_records(
+                &path,
                 &self.source_id,
                 &self.table_id,
                 self.table_mode,
                 self.source_class,
                 &self.ordering_field,
-                parsed,
             )?;
-            records.push(record);
+            let checkpoint_start = records
+                .first()
+                .map(|record| record.source_checkpoint.clone())
+                .unwrap_or_else(|| CheckpointId::new(""));
+            let checkpoint_end = records
+                .last()
+                .map(|record| record.source_checkpoint.clone())
+                .unwrap_or_else(|| checkpoint_start.clone());
+
+            batches.push(FileBatchMeta {
+                path,
+                label,
+                checkpoint_start,
+                checkpoint_end,
+            });
         }
 
-        Ok(SourceBatch {
-            batch_file: batch_file
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            records,
-        })
+        Ok(batches)
     }
 
-    fn batch_file_path(&self, batch_index: usize) -> PathBuf {
-        self.fixture_dir
-            .join(format!("batch-{batch_index:04}.jsonl"))
+    fn resume_cursor(batches: &[FileBatchMeta], checkpoint: &CheckpointId) -> Result<usize> {
+        for (index, meta) in batches.iter().enumerate() {
+            if meta.checkpoint_end == *checkpoint {
+                return Ok(index + 1);
+            }
+        }
+
+        Err(Error::msg(format!(
+            "resume checkpoint '{}' does not match any known batch boundary",
+            checkpoint
+        )))
+    }
+
+    fn validate_table_selection(&self, table: &SourceTableSelection) -> Result<()> {
+        if table.table_id.as_str() != self.table_id {
+            return Err(Error::msg(format!(
+                "table_id does not match file source: expected {}, got {}",
+                self.table_id,
+                table.table_id
+            )));
+        }
+        if !table.source_schema.is_empty() {
+            return Err(Error::msg("file source does not support source_schema"));
+        }
+        if table.source_table != self.table_id {
+            return Err(Error::msg(format!(
+                "source_table does not match file source: expected {}, got {}",
+                self.table_id, table.source_table
+            )));
+        }
+        if table.table_mode != self.table_mode {
+            return Err(Error::msg(format!(
+                "table_mode does not match file source: expected {}, got {}",
+                self.table_mode.stable_tag(),
+                table.table_mode.stable_tag()
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn discover(&self) -> Result<Vec<String>> {
+        Ok(batch_files(&self.fixture_dir)
+            .into_iter()
+            .map(|path| {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect())
     }
 }
 
-#[allow(async_fn_in_trait)]
+#[async_trait]
 impl SourceAdapter for FileSource {
-    async fn spec(&self) -> SourceSpec {
-        self.spec_sync()
+    async fn spec(&self) -> Result<SourceSpec> {
+        let spec = SourceSpec {
+            source_id: self.source_id.clone(),
+            source_class: self.source_class,
+        };
+        validate_source_spec(&spec)?;
+        Ok(spec)
     }
 
-    async fn check(&self) -> Result<CheckReport> {
-        self.check_sync()
+    async fn check(&self) -> Result<SourceCheckReport> {
+        let batches = self.scan_batches()?;
+        let mut record_count = 0usize;
+        for batch in &batches {
+            record_count += load_records(
+                &batch.path,
+                &self.source_id,
+                &self.table_id,
+                self.table_mode,
+                self.source_class,
+                &self.ordering_field,
+            )?
+            .len();
+        }
+
+        let mut capabilities = BTreeSet::new();
+        capabilities.insert(SourceCapability::InitialSnapshot);
+        capabilities.insert(SourceCapability::Resume);
+        capabilities.insert(SourceCapability::DeterministicCheckpoints);
+        capabilities.insert(SourceCapability::AppendOnly);
+        if self.table_mode == TableMode::KeyedUpsert {
+            capabilities.insert(SourceCapability::KeyedUpsert);
+            capabilities.insert(SourceCapability::StableLatestWinsOrdering);
+            capabilities.insert(SourceCapability::Deletes);
+        }
+
+        let mut details = BTreeMap::new();
+        details.insert("fixture_dir".to_string(), self.fixture_dir_display.clone());
+        details.insert("batch_count".to_string(), batches.len().to_string());
+        details.insert("record_count".to_string(), record_count.to_string());
+
+        Ok(SourceCheckReport {
+            capabilities,
+            warnings: Vec::new(),
+            details,
+        })
     }
 
-    async fn discover(&self) -> Result<DiscoverReport> {
-        self.discover_sync()
-    }
+    async fn open_capture(
+        &self,
+        req: OpenCaptureRequest,
+    ) -> Result<Box<dyn SourceCaptureSession + Send>> {
+        self.validate_table_selection(&req.table)?;
+        let batches = self.scan_batches()?;
+        let cursor = match req.resume_from.as_ref() {
+            Some(checkpoint) => Self::resume_cursor(&batches, checkpoint)?,
+            None => 0,
+        };
 
-    async fn snapshot(&self, req: SnapshotRequest) -> Result<Option<SourceBatch>> {
-        let batch_file = self.batch_file_path(req.batch_index);
-        if !batch_file.exists() {
-            return Ok(None);
+        if let Some(checkpoint) = req.resume_from {
+            let mut last_checkpoint = self
+                .last_checkpoint
+                .lock()
+                .map_err(|_| Error::msg("checkpoint state lock poisoned"))?;
+            *last_checkpoint = Some(checkpoint);
         }
 
-        self.load_batch_file(&batch_file).map(Some)
-    }
-
-    async fn checkpoint(&self, ack: CheckpointAck) -> Result<()> {
-        if ack.source_id.trim().is_empty() {
-            return Err(Error::msg("checkpoint ack source_id is required"));
-        }
-        if ack.snapshot.uri.trim().is_empty() {
-            return Err(Error::msg("checkpoint ack snapshot uri is required"));
-        }
-        if ack.source_id != self.source_id {
-            return Err(Error::msg("checkpoint ack source_id does not match source"));
-        }
-
-        let mut last_checkpoint = self
-            .last_checkpoint
-            .lock()
-            .map_err(|_| Error::msg("checkpoint state lock poisoned"))?;
-        if let Some(previous) = last_checkpoint.as_ref() {
-            if ack.checkpoint < previous.clone() {
-                return Err(Error::msg("checkpoint regression is not allowed"));
-            }
-        }
-        *last_checkpoint = Some(ack.checkpoint);
-
-        Ok(())
+        Ok(Box::new(FileCaptureSession {
+            source_id: self.source_id.clone(),
+            table_id: self.table_id.clone(),
+            table_mode: self.table_mode,
+            source_class: self.source_class,
+            ordering_field: self.ordering_field.clone(),
+            batches,
+            cursor,
+            last_checkpoint: Arc::clone(&self.last_checkpoint),
+        }))
     }
 }
 
@@ -240,6 +356,40 @@ fn batch_files(fixture_dir: &Path) -> Vec<PathBuf> {
     }
     batch_files.sort();
     batch_files
+}
+
+fn load_records(
+    batch_file: &Path,
+    source_id: &str,
+    table_id: &str,
+    table_mode: TableMode,
+    source_class: SourceClass,
+    ordering_field: &str,
+) -> Result<Vec<LogicalMutation>> {
+    let content = fs::read_to_string(batch_file)
+        .map_err(|err| Error::msg(format!("{}: {err}", batch_file.display())))?;
+    let mut records = Vec::new();
+
+    for (line_no, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let parsed = parse_json_value(line)
+            .map_err(|err| Error::msg(format!("{}:{}: {err}", batch_file.display(), line_no + 1)))?;
+        let record = record_from_value(
+            source_id,
+            table_id,
+            table_mode,
+            source_class,
+            ordering_field,
+            parsed,
+        )?;
+        records.push(record);
+    }
+
+    Ok(records)
 }
 
 fn record_from_value(

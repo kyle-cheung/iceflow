@@ -138,7 +138,9 @@ fn file_capture_session_rejects_unknown_resume_checkpoint() {
         },
         resume_from: Some(checkpoint("cp-9999")),
     };
-    let err =
-        block_on(source.open_capture(req)).expect_err("unknown resume checkpoint should fail");
+    let err = match block_on(source.open_capture(req)) {
+        Ok(_) => panic!("unknown resume checkpoint should fail"),
+        Err(err) => err,
+    };
     assert!(err.to_string().contains("resume checkpoint"));
 }

@@ -2,6 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use iceflow_types::{CheckpointId, LogicalMutation, TableId, TableMode};
 
+#[allow(dead_code)] // Session implementations will own phase internally once live sources arrive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapturePhase {
     Snapshot,
@@ -22,19 +23,10 @@ pub struct OpenCaptureRequest {
     pub resume_from: Option<CheckpointId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BatchRequest {
     pub max_records: Option<u64>,
     pub max_bytes: Option<u64>,
-}
-
-impl Default for BatchRequest {
-    fn default() -> Self {
-        Self {
-            max_records: None,
-            max_bytes: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
