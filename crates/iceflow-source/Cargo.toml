@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { path = "../anyhow" }
+async-trait = "0.1"
 chrono = { path = "../chrono" }
 iceflow-types = { path = "../iceflow-types" }
 serde_json = { path = "../serde_json" }
