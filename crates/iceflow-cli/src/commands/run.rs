@@ -4,15 +4,15 @@ use iceflow_sink::{
     CommitRequest as SinkCommitRequest, FilesystemSink, IdempotencyKey, PolarisSink, Sink,
 };
 use iceflow_source::{
-    CheckpointAck as SourceCheckpointAck, FileSource, SnapshotRef as SourceSnapshotRef,
-    SnapshotRequest, SourceAdapter,
+    BatchPoll, BatchRequest, CheckpointAck as SourceCheckpointAck, FileSource,
+    OpenCaptureRequest, SourceAdapter, SourceTableSelection,
 };
 use iceflow_state::{
     checkpoint_ack as state_checkpoint_ack, checkpoint_ref, AttemptResolution, BatchFile,
     CommitRequest as StateCommitRequest, SnapshotRef as StateSnapshotRef, SqliteStateStore,
     StateStore,
 };
-use iceflow_types::{BatchId, BatchManifest};
+use iceflow_types::{BatchId, BatchManifest, TableId, TableMode};
 use iceflow_worker_duckdb::DuckDbWorker;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,14 +156,20 @@ pub fn execute_blocking(args: Args) -> Result<RunReport> {
 pub async fn execute(args: Args) -> Result<RunReport> {
     let fixture_dir = fixture_dir_for_workload(&args.workload)?;
     let source = FileSource::from_fixture_dir(fixture_dir);
-    let spec = source.spec().await;
+    let spec = source.spec().await?;
+    let table = workload_table_selection(&args.workload)?;
+    let table_id = table.table_id.clone();
     let worker = DuckDbWorker::in_memory()?;
     let state = SqliteStateStore::new().await?;
     let mut runtime = RuntimeCoordinator::new();
-    let sink = build_sink(&args, &spec.table_id)?;
+    let sink = build_sink(&args, table_id.as_str())?;
+    let mut session = source
+        .open_capture(OpenCaptureRequest {
+            table,
+            resume_from: None,
+        })
+        .await?;
 
-    let table_id = spec.table_id.clone().into();
-    let batch_limit = args.batch_limit.unwrap_or(usize::MAX);
     let mut report = RunReport {
         workload: args.workload.clone(),
         committed_batches: 0,
@@ -172,117 +178,135 @@ pub async fn execute(args: Args) -> Result<RunReport> {
         durable_checkpoint: None,
     };
 
-    for batch_index in 1..=batch_limit {
-        match runtime.try_admit(&table_id) {
-            IntakeDecision::Admitted => {}
-            IntakeDecision::Paused(reason) => {
-                return Err(Error::msg(format!("runtime intake paused: {reason}")));
+    let run_result = async {
+        loop {
+            if let Some(limit) = args.batch_limit {
+                if report.committed_batches >= limit {
+                    break;
+                }
             }
-        }
 
-        let Some(batch) = source.snapshot(SnapshotRequest { batch_index }).await? else {
+            match runtime.try_admit(&table_id) {
+                IntakeDecision::Admitted => {}
+                IntakeDecision::Paused(reason) => {
+                    return Err(Error::msg(format!("runtime intake paused: {reason}")));
+                }
+            }
+
+            let batch = match session.poll_batch(BatchRequest::default()).await? {
+                BatchPoll::Batch(batch) => batch,
+                BatchPoll::Idle => continue,
+                BatchPoll::Exhausted => {
+                    runtime.clear_in_memory_batch(&table_id);
+                    break;
+                }
+            };
+
+            let materialized = worker.materialize(batch).await?;
             runtime.clear_in_memory_batch(&table_id);
-            break;
-        };
+            runtime.record_durable_pending_batch(&table_id);
 
-        let materialized = worker.materialize(batch).await?;
-        runtime.clear_in_memory_batch(&table_id);
-        runtime.record_durable_pending_batch(&table_id);
+            let manifest = materialized.manifest;
+            let batch_id = state.register_batch(manifest.clone()).await?;
+            state
+                .record_files(batch_id.clone(), state_files_for_manifest(&manifest))
+                .await?;
 
-        let manifest = materialized.manifest;
-        let batch_id = state.register_batch(manifest.clone()).await?;
-        state
-            .record_files(batch_id.clone(), state_files_for_manifest(&manifest))
-            .await?;
-
-        let idempotency_key = first_attempt_key(&batch_id);
-        let prepared = sink
-            .prepare_commit(SinkCommitRequest {
-                batch_id: batch_id.clone(),
-                destination_uri: args.destination_uri.clone(),
-                manifest: manifest.clone(),
-                idempotency_key: idempotency_key.clone(),
-            })
-            .await?;
-
-        let attempt = state
-            .begin_commit(
-                batch_id.clone(),
-                StateCommitRequest {
+            let idempotency_key = first_attempt_key(&batch_id);
+            let prepared = sink
+                .prepare_commit(SinkCommitRequest {
+                    batch_id: batch_id.clone(),
                     destination_uri: args.destination_uri.clone(),
-                    snapshot: StateSnapshotRef {
-                        uri: prepared.snapshot.uri.clone(),
+                    manifest: manifest.clone(),
+                    idempotency_key: idempotency_key.clone(),
+                })
+                .await?;
+
+            let attempt = state
+                .begin_commit(
+                    batch_id.clone(),
+                    StateCommitRequest {
+                        destination_uri: args.destination_uri.clone(),
+                        snapshot: StateSnapshotRef {
+                            uri: prepared.snapshot.uri.clone(),
+                        },
+                        actor: "iceflow-cli".to_string(),
                     },
-                    actor: "iceflow-cli".to_string(),
-                },
-            )
-            .await?;
+                )
+                .await?;
 
-        if attempt.idempotency_key != idempotency_key.as_str() {
-            return Err(Error::msg(
-                "state store idempotency key drifted from CLI expectation",
-            ));
-        }
-
-        let committed = sink.commit(prepared).await?;
-        state
-            .resolve_commit(attempt.id.clone(), AttemptResolution::Committed)
-            .await?;
-        state
-            .link_checkpoint_pending(
-                batch_id.clone(),
-                checkpoint_ref(
-                    spec.source_id.clone(),
-                    manifest.source_checkpoint_end.clone(),
-                ),
-                StateSnapshotRef {
-                    uri: committed.snapshot.uri.clone(),
-                },
-            )
-            .await?;
-
-        runtime.clear_durable_pending_batch(&table_id);
-        match runtime.checkpoint_decision(&table_id) {
-            CheckpointDecision::Advanced => {}
-            CheckpointDecision::Blocked(reason) => {
-                return Err(Error::msg(format!(
-                    "checkpoint remained blocked after commit resolution: {reason}"
-                )));
+            if attempt.idempotency_key != idempotency_key.as_str() {
+                return Err(Error::msg(
+                    "state store idempotency key drifted from CLI expectation",
+                ));
             }
-        }
 
-        source
-            .checkpoint(SourceCheckpointAck {
-                source_id: spec.source_id.clone(),
-                checkpoint: manifest.source_checkpoint_end.clone(),
-                snapshot: SourceSnapshotRef {
-                    uri: committed.snapshot.uri.clone(),
-                },
-            })
-            .await?;
-        state
-            .mark_checkpoint_durable(
-                batch_id.clone(),
-                state_checkpoint_ack(
-                    spec.source_id.clone(),
-                    manifest.source_checkpoint_end.clone(),
+            let committed = sink.commit(prepared).await?;
+            state
+                .resolve_commit(attempt.id.clone(), AttemptResolution::Committed)
+                .await?;
+            state
+                .link_checkpoint_pending(
+                    batch_id.clone(),
+                    checkpoint_ref(
+                        spec.source_id.clone(),
+                        manifest.source_checkpoint_end.clone(),
+                    ),
                     StateSnapshotRef {
                         uri: committed.snapshot.uri.clone(),
                     },
-                ),
-            )
-            .await?;
+                )
+                .await?;
 
-        report.committed_batches += 1;
-        report.committed_files += manifest.file_set.len();
-        report.last_snapshot_uri = Some(committed.snapshot.uri.clone());
-        report.durable_checkpoint = state
-            .durable_checkpoint(batch_id)
-            .await?
-            .map(|checkpoint| checkpoint.checkpoint.to_string());
+            runtime.clear_durable_pending_batch(&table_id);
+            match runtime.checkpoint_decision(&table_id) {
+                CheckpointDecision::Advanced => {}
+                CheckpointDecision::Blocked(reason) => {
+                    return Err(Error::msg(format!(
+                        "checkpoint remained blocked after commit resolution: {reason}"
+                    )));
+                }
+            }
+
+            session
+                .checkpoint(SourceCheckpointAck {
+                    source_id: spec.source_id.clone(),
+                    checkpoint: manifest.source_checkpoint_end.clone(),
+                    snapshot_uri: committed.snapshot.uri.clone(),
+                })
+                .await?;
+            state
+                .mark_checkpoint_durable(
+                    batch_id.clone(),
+                    state_checkpoint_ack(
+                        spec.source_id.clone(),
+                        manifest.source_checkpoint_end.clone(),
+                        StateSnapshotRef {
+                            uri: committed.snapshot.uri.clone(),
+                        },
+                    ),
+                )
+                .await?;
+
+            report.committed_batches += 1;
+            report.committed_files += manifest.file_set.len();
+            report.last_snapshot_uri = Some(committed.snapshot.uri.clone());
+            report.durable_checkpoint = state
+                .durable_checkpoint(batch_id)
+                .await?
+                .map(|checkpoint| checkpoint.checkpoint.to_string());
+        }
+
+        Ok::<(), anyhow::Error>(())
     }
+    .await;
 
-    Ok(report)
+    let close_result = session.close().await;
+    match (run_result, close_result) {
+        (Err(err), _) => Err(err),
+        (Ok(()), Err(err)) => Err(err),
+        (Ok(()), Ok(())) => Ok(report),
+    }
 }
 
 fn build_sink(args: &Args, table_id: &str) -> Result<ConfiguredSink> {
@@ -317,6 +341,24 @@ fn fixture_dir_for_workload(workload: &str) -> Result<&'static str> {
     match workload {
         "append_only.orders_events" => Ok("fixtures/reference_workload_v0/orders_events"),
         "keyed_upsert.customer_state" => Ok("fixtures/reference_workload_v0/customer_state"),
+        other => Err(Error::msg(format!("unsupported workload: {other}"))),
+    }
+}
+
+fn workload_table_selection(workload: &str) -> Result<SourceTableSelection> {
+    match workload {
+        "append_only.orders_events" => Ok(SourceTableSelection {
+            table_id: TableId::new("orders_events"),
+            source_schema: String::new(),
+            source_table: "orders_events".to_string(),
+            table_mode: TableMode::AppendOnly,
+        }),
+        "keyed_upsert.customer_state" => Ok(SourceTableSelection {
+            table_id: TableId::new("customer_state"),
+            source_schema: String::new(),
+            source_table: "customer_state".to_string(),
+            table_mode: TableMode::KeyedUpsert,
+        }),
         other => Err(Error::msg(format!("unsupported workload: {other}"))),
     }
 }
