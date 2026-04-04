@@ -289,7 +289,9 @@ mod tests {
 
     fn sample_append_only_batch(batch_stem: &str, order_start: i64) -> SourceBatch {
         SourceBatch {
-            batch_file: format!("fixtures/orders/{batch_stem}.jsonl"),
+            batch_label: Some(format!("fixtures/orders/{batch_stem}.jsonl")),
+            checkpoint_start: Some(checkpoint(format!("cp-{order_start}"))),
+            checkpoint_end: checkpoint(format!("cp-{}", order_start + 2)),
             records: vec![
                 append_insert(order_start, order_start),
                 append_insert(order_start + 1, order_start + 1),
