@@ -739,6 +739,18 @@ mod tests {
     }
 
     #[test]
+    fn parquet_writer_uses_content_hash_when_batch_label_is_missing() {
+        let worker = DuckDbWorker::in_memory().expect("worker");
+        let output = run_ready(worker.materialize(sample_label_less_batch()))
+            .expect("materialized batch");
+
+        assert_eq!(
+            output.manifest.batch_id.as_str(),
+            format!("batch-{}", output.manifest.content_hash)
+        );
+    }
+
+    #[test]
     fn json_text_escapes_all_control_characters() {
         let value = serde_json::Value::String("bad\u{0008}\u{000c}\u{0001}\n\r\t".to_string());
 
@@ -773,6 +785,19 @@ mod tests {
     fn sample_append_only_batch() -> SourceBatch {
         SourceBatch {
             batch_label: Some("fixtures/orders/batch-0001.jsonl".to_string()),
+            checkpoint_start: Some(checkpoint("cp-11")),
+            checkpoint_end: checkpoint("cp-13"),
+            records: vec![
+                append_insert(1, 11),
+                append_insert(2, 12),
+                append_insert(3, 13),
+            ],
+        }
+    }
+
+    fn sample_label_less_batch() -> SourceBatch {
+        SourceBatch {
+            batch_label: None,
             checkpoint_start: Some(checkpoint("cp-11")),
             checkpoint_end: checkpoint("cp-13"),
             records: vec![

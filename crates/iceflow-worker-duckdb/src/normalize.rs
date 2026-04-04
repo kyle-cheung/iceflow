@@ -119,6 +119,7 @@ pub fn normalize_batch(batch: SourceBatch) -> Result<NormalizedBatch> {
         }
     }
 
+    // A missing start means the source treats the batch as a single-point durable range.
     let source_checkpoint_start = checkpoint_start.unwrap_or_else(|| checkpoint_end.clone());
     let source_checkpoint_end = checkpoint_end;
 

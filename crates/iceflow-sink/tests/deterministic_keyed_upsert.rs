@@ -113,7 +113,9 @@ fn keyed_upsert_schema_change_during_retry_is_rejected() -> Result<()> {
 
 fn sample_keyed_upsert_batch() -> SourceBatch {
     SourceBatch {
-        batch_file: "fixtures/customer_state/batch-0001.jsonl".to_string(),
+        batch_label: Some("fixtures/customer_state/batch-0001.jsonl".to_string()),
+        checkpoint_start: Some(checkpoint("cp-10")),
+        checkpoint_end: checkpoint("cp-25"),
         records: vec![
             keyed_upsert(1, 10, Some(json!({ "customer_id": 1, "status": "trial" }))),
             keyed_upsert(2, 15, Some(json!({ "customer_id": 2, "status": "active" }))),
@@ -125,14 +127,18 @@ fn sample_keyed_upsert_batch() -> SourceBatch {
 
 fn sample_delete_tombstone_batch() -> SourceBatch {
     SourceBatch {
-        batch_file: "fixtures/customer_state/batch-0002.jsonl".to_string(),
+        batch_label: Some("fixtures/customer_state/batch-0002.jsonl".to_string()),
+        checkpoint_start: Some(checkpoint("cp-30")),
+        checkpoint_end: checkpoint("cp-30"),
         records: vec![keyed_delete(4, 30)],
     }
 }
 
 fn sample_ordering_violation_batch() -> SourceBatch {
     SourceBatch {
-        batch_file: "fixtures/customer_state/batch-0003.jsonl".to_string(),
+        batch_label: Some("fixtures/customer_state/batch-0003.jsonl".to_string()),
+        checkpoint_start: Some(checkpoint("cp-10")),
+        checkpoint_end: checkpoint("cp-20"),
         records: vec![
             keyed_upsert(1, 20, Some(json!({ "customer_id": 1, "status": "active" }))),
             keyed_upsert(1, 10, Some(json!({ "customer_id": 1, "status": "trial" }))),
