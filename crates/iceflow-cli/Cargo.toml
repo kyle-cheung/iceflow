@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { path = "../anyhow" }
+async-trait = "0.1"
 iceflow-runtime = { path = "../iceflow-runtime" }
 iceflow-sink = { path = "../iceflow-sink" }
 iceflow-source = { path = "../iceflow-source" }
@@ -14,3 +15,4 @@ iceflow-worker-duckdb = { path = "../iceflow-worker-duckdb" }
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149" }
+toml = "0.8"

@@ -1,0 +1,4 @@
+version = 1
+kind = "polaris"
+endpoint = "http://127.0.0.1:8181/api/catalog"
+warehouse = "quickstart_catalog"

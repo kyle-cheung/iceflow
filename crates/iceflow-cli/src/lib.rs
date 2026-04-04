@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod config;
 
 use anyhow::{Error, Result};
 use std::future::Future;
