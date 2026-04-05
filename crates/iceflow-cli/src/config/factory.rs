@@ -257,6 +257,7 @@ impl SourceAdapter for RoutedFileSource {
         let session = delegated_source.open_capture(delegated_req).await?;
 
         Ok(Box::new(RoutedFileCaptureSession {
+            outer_table_id: req.table.table_id,
             outer_source_id: self.source_id.clone(),
             inner_source_id: delegated_spec.source_id,
             inner: session,
@@ -265,6 +266,7 @@ impl SourceAdapter for RoutedFileSource {
 }
 
 struct RoutedFileCaptureSession {
+    outer_table_id: TableId,
     outer_source_id: String,
     inner_source_id: String,
     inner: Box<dyn SourceCaptureSession + Send>,
@@ -273,7 +275,16 @@ struct RoutedFileCaptureSession {
 #[async_trait]
 impl SourceCaptureSession for RoutedFileCaptureSession {
     async fn poll_batch(&mut self, req: BatchRequest) -> Result<BatchPoll> {
-        self.inner.poll_batch(req).await
+        match self.inner.poll_batch(req).await? {
+            BatchPoll::Batch(mut batch) => {
+                for record in &mut batch.records {
+                    record.table_id = self.outer_table_id.clone();
+                    record.source_id = self.outer_source_id.clone();
+                }
+                Ok(BatchPoll::Batch(batch))
+            }
+            other => Ok(other),
+        }
     }
 
     async fn checkpoint(&mut self, ack: CheckpointAck) -> Result<()> {

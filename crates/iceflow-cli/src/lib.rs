@@ -17,7 +17,9 @@ impl Cli {
             .with_subcommand(CommandSpec::new("run"))
             .with_subcommand(CommandSpec::new("compact"))
             .with_subcommand(
-                CommandSpec::new("connector").with_subcommand(CommandSpec::new("check")),
+                CommandSpec::new("connector")
+                    .with_subcommand(CommandSpec::new("check"))
+                    .with_subcommand(CommandSpec::new("run")),
             )
             .with_subcommand(CommandSpec::new("source").with_subcommand(CommandSpec::new("check")))
     }
@@ -52,6 +54,7 @@ pub enum Commands {
     Run(commands::run::Args),
     Compact(commands::compact::Args),
     ConnectorCheck(commands::connector_cmd::CheckArgs),
+    ConnectorRun(commands::connector_cmd::RunArgs),
     SourceCheck(commands::source_cmd::Args),
 }
 
@@ -115,6 +118,11 @@ pub fn run_env() -> Result<()> {
             println!("{}", report.to_json());
             Ok(())
         }
+        Commands::ConnectorRun(args) => {
+            let report = commands::connector_cmd::run_blocking(args)?;
+            println!("{}", report.to_json());
+            Ok(())
+        }
         Commands::SourceCheck(args) => {
             let report = commands::source_cmd::execute_blocking(args)?;
             println!("{}", commands::source_cmd::format_report_json(&report));
@@ -131,6 +139,9 @@ fn parse_connector_subcommand(args: Vec<String>) -> Result<Commands> {
     match subcommand.as_str() {
         "check" => Ok(Commands::ConnectorCheck(
             commands::connector_cmd::CheckArgs::parse(&args[1..])?,
+        )),
+        "run" => Ok(Commands::ConnectorRun(
+            commands::connector_cmd::RunArgs::parse(&args[1..])?,
         )),
         other => Err(Error::msg(format!("unknown connector subcommand: {other}"))),
     }
@@ -231,8 +242,33 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_connector_run_subcommand() {
+        let parsed = crate::Cli::parse_from([
+            "iceflow",
+            "connector",
+            "run",
+            "--connector",
+            "fixtures/config_samples/connectors/orders_append.toml",
+        ])
+        .expect("parsed command");
+
+        assert!(matches!(
+            parsed,
+            crate::Commands::ConnectorRun(crate::commands::connector_cmd::RunArgs { .. })
+        ));
+    }
+
+    #[test]
     fn cli_rejects_connector_check_without_connector_flag() {
         let err = crate::Cli::parse_from(["iceflow", "connector", "check"])
+            .expect_err("missing --connector should fail");
+
+        assert_eq!(err.to_string(), "--connector <path> is required");
+    }
+
+    #[test]
+    fn cli_rejects_connector_run_without_connector_flag() {
+        let err = crate::Cli::parse_from(["iceflow", "connector", "run"])
             .expect_err("missing --connector should fail");
 
         assert_eq!(err.to_string(), "--connector <path> is required");

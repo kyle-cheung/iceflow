@@ -4,8 +4,8 @@ use iceflow_sink::{
     CommitRequest as SinkCommitRequest, FilesystemSink, IdempotencyKey, PolarisSink, Sink,
 };
 use iceflow_source::{
-    BatchPoll, BatchRequest, CheckpointAck as SourceCheckpointAck, FileSource,
-    OpenCaptureRequest, SourceAdapter, SourceTableSelection,
+    BatchPoll, BatchRequest, CheckpointAck as SourceCheckpointAck, FileSource, OpenCaptureRequest,
+    SourceAdapter, SourceTableSelection,
 };
 use iceflow_state::{
     checkpoint_ack as state_checkpoint_ack, checkpoint_ref, AttemptResolution, BatchFile,
@@ -371,13 +371,13 @@ fn idle_poll_backoff() -> Duration {
     IDLE_POLL_BACKOFF
 }
 
-async fn idle_backoff_sleep() {
+pub(super) async fn idle_backoff_sleep() {
     // This CLI uses a single-future custom block_on executor, so sleeping here
     // only backs off this command's polling loop rather than starving unrelated tasks.
     std::thread::sleep(idle_poll_backoff());
 }
 
-fn finalize_run_result<T>(run_result: Result<T>, close_result: Result<()>) -> Result<T> {
+pub(super) fn finalize_run_result<T>(run_result: Result<T>, close_result: Result<()>) -> Result<T> {
     match (run_result, close_result) {
         (Err(err), Err(close_err)) => Err(Error::msg(format!(
             "{err}; additionally, session close failed: {close_err}"
@@ -388,11 +388,11 @@ fn finalize_run_result<T>(run_result: Result<T>, close_result: Result<()>) -> Re
     }
 }
 
-fn first_attempt_key(batch_id: &BatchId) -> IdempotencyKey {
+pub(super) fn first_attempt_key(batch_id: &BatchId) -> IdempotencyKey {
     IdempotencyKey::from(format!("{}:1", batch_id.as_str()))
 }
 
-fn state_files_for_manifest(manifest: &BatchManifest) -> Vec<BatchFile> {
+pub(super) fn state_files_for_manifest(manifest: &BatchManifest) -> Vec<BatchFile> {
     manifest
         .file_set
         .iter()

@@ -1,11 +1,27 @@
 use anyhow::{Error, Result};
-use iceflow_source::SourceCapability;
+use iceflow_runtime::{CheckpointDecision, IntakeDecision, RuntimeCoordinator};
+use iceflow_sink::{CommitRequest as SinkCommitRequest, Sink};
+use iceflow_source::{
+    BatchPoll, BatchRequest, CheckpointAck as SourceCheckpointAck, OpenCaptureRequest,
+    SourceCapability, SourceTableSelection,
+};
+use iceflow_state::{
+    checkpoint_ack as state_checkpoint_ack, checkpoint_ref, AttemptResolution,
+    CommitRequest as StateCommitRequest, SnapshotRef as StateSnapshotRef, SqliteStateStore,
+    StateStore,
+};
+use iceflow_types::TableMode;
+use iceflow_worker_duckdb::DuckDbWorker;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use crate::commands::run::{
+    finalize_run_result, first_attempt_key, idle_backoff_sleep, state_files_for_manifest,
+};
 use crate::config::{
-    build_source_from_config, load_catalog_config, load_connector_config, load_destination_config,
+    build_sink_from_config, build_source_from_config, connector_table_id, load_catalog_config,
+    load_connector_config, load_destination_config, load_optional_catalog_config,
     load_source_config, resolve_catalog_name, CaptureSettings, ConnectorConfig, DestinationConfig,
 };
 
@@ -15,12 +31,26 @@ pub struct CheckArgs {
     pub config_root: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunArgs {
+    pub connector_config: PathBuf,
+    pub config_root: PathBuf,
+    pub batch_limit: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CheckReport {
     pub valid: bool,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
     pub table_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RunReport {
+    pub tables_processed: usize,
+    pub total_committed_batches: usize,
+    pub total_committed_files: usize,
 }
 
 impl CheckArgs {
@@ -40,14 +70,70 @@ impl CheckArgs {
     }
 }
 
+impl RunArgs {
+    pub fn parse(args: &[String]) -> Result<Self> {
+        let mut connector_config = None;
+        let mut batch_limit = None;
+        let mut index = 0;
+
+        while index < args.len() {
+            match args[index].as_str() {
+                "--connector" => {
+                    index += 1;
+                    connector_config = args.get(index).map(PathBuf::from);
+                }
+                "--batch-limit" => {
+                    index += 1;
+                    let value = args
+                        .get(index)
+                        .ok_or_else(|| Error::msg("--batch-limit requires a value"))?;
+                    let parsed = value
+                        .parse::<usize>()
+                        .map_err(|_| Error::msg("--batch-limit must be a positive integer"))?;
+                    if parsed == 0 {
+                        return Err(Error::msg("--batch-limit must be greater than zero"));
+                    }
+                    batch_limit = Some(parsed);
+                }
+                other => {
+                    return Err(Error::msg(format!(
+                        "unknown connector run argument: {other}"
+                    )));
+                }
+            }
+            index += 1;
+        }
+
+        let connector_config =
+            connector_config.ok_or_else(|| Error::msg("--connector <path> is required"))?;
+        let config_root = infer_config_root(&connector_config)?;
+
+        Ok(Self {
+            connector_config,
+            config_root,
+            batch_limit,
+        })
+    }
+}
+
 impl CheckReport {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("connector check report serialization should not fail")
     }
 }
 
+impl RunReport {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("connector run report serialization should not fail")
+    }
+}
+
 pub fn check_blocking(args: CheckArgs) -> Result<CheckReport> {
     crate::block_on(check(args))
+}
+
+pub fn run_blocking(args: RunArgs) -> Result<RunReport> {
+    crate::block_on(run(args))
 }
 
 pub async fn check(args: CheckArgs) -> Result<CheckReport> {
@@ -172,6 +258,217 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
     })
 }
 
+pub async fn run(args: RunArgs) -> Result<RunReport> {
+    let state = SqliteStateStore::new().await?;
+    run_with_state(args, &state).await
+}
+
+pub async fn run_with_state<S>(args: RunArgs, state: &S) -> Result<RunReport>
+where
+    S: StateStore,
+{
+    let connector = load_connector_config(&args.connector_config)?;
+    let source_path = args
+        .config_root
+        .join("sources")
+        .join(format!("{}.toml", connector.source));
+    let source_config = load_source_config(&source_path)
+        .map_err(|err| Error::msg(format!("source '{}': {err}", connector.source)))?;
+    let destination_path = args
+        .config_root
+        .join("destinations")
+        .join(format!("{}.toml", connector.destination));
+    let destination_config = load_destination_config(&destination_path)
+        .map_err(|err| Error::msg(format!("destination '{}': {err}", connector.destination)))?;
+    let catalog_config =
+        load_optional_catalog_config(&args.config_root, &connector, &destination_config)
+            .map_err(|err| Error::msg(format!("catalog resolution: {err}")))?;
+    let source = build_source_from_config(
+        &source_config,
+        source_path.parent().unwrap_or_else(|| Path::new(".")),
+    )
+    .map_err(|err| Error::msg(format!("build source '{}': {err}", connector.source)))?;
+    let source_spec = source
+        .spec()
+        .await
+        .map_err(|err| Error::msg(format!("source spec '{}': {err}", connector.source)))?;
+    let worker = DuckDbWorker::in_memory()?;
+    let mut runtime = RuntimeCoordinator::new();
+    let mut total_committed_batches = 0;
+    let mut total_committed_files = 0;
+    let mut tables_processed = 0;
+
+    for table_entry in &connector.tables {
+        if matches!(args.batch_limit, Some(limit) if total_committed_batches >= limit) {
+            break;
+        }
+
+        let table_mode = parse_table_mode(&table_entry.table_mode)?;
+        let table_id = connector_table_id(table_entry);
+        let resume_from = state
+            .last_durable_checkpoint_for_table(&table_id)
+            .await?
+            .map(|checkpoint| checkpoint.checkpoint);
+
+        let sink = build_sink_from_config(
+            &destination_config,
+            catalog_config.as_ref(),
+            table_entry,
+            &table_id,
+        )
+        .map_err(|err| Error::msg(format!("build sink '{}': {err}", connector.destination)))?;
+
+        let mut session = source
+            .open_capture(OpenCaptureRequest {
+                table: SourceTableSelection {
+                    table_id: table_id.clone(),
+                    source_schema: table_entry.source_schema.clone(),
+                    source_table: table_entry.source_table.clone(),
+                    table_mode,
+                },
+                resume_from,
+            })
+            .await
+            .map_err(|err| {
+                Error::msg(format!(
+                    "open capture for '{}.{}': {err}",
+                    table_entry.destination_namespace, table_entry.destination_table
+                ))
+            })?;
+        tables_processed += 1;
+
+        let table_result = async {
+            loop {
+                if let Some(limit) = args.batch_limit {
+                    if total_committed_batches >= limit {
+                        break;
+                    }
+                }
+
+                match runtime.try_admit(&table_id) {
+                    IntakeDecision::Admitted => {}
+                    IntakeDecision::Paused(reason) => {
+                        return Err(Error::msg(format!("runtime intake paused: {reason}")));
+                    }
+                }
+
+                let batch = match session.poll_batch(BatchRequest::default()).await? {
+                    BatchPoll::Batch(batch) => batch,
+                    BatchPoll::Idle => {
+                        idle_backoff_sleep().await;
+                        continue;
+                    }
+                    BatchPoll::Exhausted => {
+                        runtime.clear_in_memory_batch(&table_id);
+                        break;
+                    }
+                };
+
+                let materialized = worker.materialize(batch).await?;
+                runtime.clear_in_memory_batch(&table_id);
+                runtime.record_durable_pending_batch(&table_id);
+
+                let manifest = materialized.manifest;
+                let batch_id = state.register_batch(manifest.clone()).await?;
+                state
+                    .record_files(batch_id.clone(), state_files_for_manifest(&manifest))
+                    .await?;
+
+                let idempotency_key = first_attempt_key(&batch_id);
+                let destination_uri = sink.destination_uri().to_string();
+                let prepared = sink
+                    .prepare_commit(SinkCommitRequest {
+                        batch_id: batch_id.clone(),
+                        destination_uri: destination_uri.clone(),
+                        manifest: manifest.clone(),
+                        idempotency_key: idempotency_key.clone(),
+                    })
+                    .await?;
+
+                let attempt = state
+                    .begin_commit(
+                        batch_id.clone(),
+                        StateCommitRequest {
+                            destination_uri,
+                            snapshot: StateSnapshotRef {
+                                uri: prepared.snapshot.uri.clone(),
+                            },
+                            actor: "iceflow-cli".to_string(),
+                        },
+                    )
+                    .await?;
+
+                if attempt.idempotency_key != idempotency_key.as_str() {
+                    return Err(Error::msg(
+                        "state store idempotency key drifted from CLI expectation",
+                    ));
+                }
+
+                let committed = sink.commit(prepared).await?;
+                state
+                    .resolve_commit(attempt.id.clone(), AttemptResolution::Committed)
+                    .await?;
+                state
+                    .link_checkpoint_pending(
+                        batch_id.clone(),
+                        checkpoint_ref(
+                            source_spec.source_id.clone(),
+                            manifest.source_checkpoint_end.clone(),
+                        ),
+                        StateSnapshotRef {
+                            uri: committed.snapshot.uri.clone(),
+                        },
+                    )
+                    .await?;
+
+                runtime.clear_durable_pending_batch(&table_id);
+                match runtime.checkpoint_decision(&table_id) {
+                    CheckpointDecision::Advanced => {}
+                    CheckpointDecision::Blocked(reason) => {
+                        return Err(Error::msg(format!(
+                            "checkpoint remained blocked after commit resolution: {reason}"
+                        )));
+                    }
+                }
+
+                session
+                    .checkpoint(SourceCheckpointAck {
+                        source_id: source_spec.source_id.clone(),
+                        checkpoint: manifest.source_checkpoint_end.clone(),
+                        snapshot_uri: committed.snapshot.uri.clone(),
+                    })
+                    .await?;
+                state
+                    .mark_checkpoint_durable(
+                        batch_id,
+                        state_checkpoint_ack(
+                            source_spec.source_id.clone(),
+                            manifest.source_checkpoint_end.clone(),
+                            StateSnapshotRef {
+                                uri: committed.snapshot.uri.clone(),
+                            },
+                        ),
+                    )
+                    .await?;
+
+                total_committed_batches += 1;
+                total_committed_files += manifest.file_set.len();
+            }
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        finalize_run_result(table_result, session.close().await)?;
+    }
+
+    Ok(RunReport {
+        tables_processed,
+        total_committed_batches,
+        total_committed_files,
+    })
+}
+
 fn infer_config_root(connector_config: &Path) -> Result<PathBuf> {
     let Some(connectors_dir) = connector_config.parent() else {
         return Err(Error::msg(
@@ -194,6 +491,14 @@ fn infer_config_root(connector_config: &Path) -> Result<PathBuf> {
     }
 
     Ok(config_root.to_path_buf())
+}
+
+fn parse_table_mode(value: &str) -> Result<TableMode> {
+    match value {
+        "append_only" => Ok(TableMode::AppendOnly),
+        "keyed_upsert" => Ok(TableMode::KeyedUpsert),
+        other => Err(Error::msg(format!("unsupported table_mode: {other}"))),
+    }
 }
 
 enum CatalogValidation {
@@ -283,5 +588,48 @@ mod tests {
             err.to_string(),
             "--connector must be nested under <config-root>/connectors/"
         );
+    }
+
+    #[test]
+    fn run_args_parse_derives_config_root_and_batch_limit() -> Result<()> {
+        let parsed = RunArgs::parse(&[
+            "--connector".to_string(),
+            "fixtures/config_samples/connectors/orders_append.toml".to_string(),
+            "--batch-limit".to_string(),
+            "2".to_string(),
+        ])?;
+
+        assert_eq!(
+            parsed.connector_config,
+            PathBuf::from("fixtures/config_samples/connectors/orders_append.toml")
+        );
+        assert_eq!(parsed.config_root, PathBuf::from("fixtures/config_samples"));
+        assert_eq!(parsed.batch_limit, Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn run_args_parse_rejects_zero_batch_limit() {
+        let err = RunArgs::parse(&[
+            "--connector".to_string(),
+            "fixtures/config_samples/connectors/orders_append.toml".to_string(),
+            "--batch-limit".to_string(),
+            "0".to_string(),
+        ])
+        .expect_err("zero batch limit should fail");
+
+        assert_eq!(err.to_string(), "--batch-limit must be greater than zero");
+    }
+
+    #[test]
+    fn run_args_parse_rejects_unknown_argument() {
+        let err = RunArgs::parse(&[
+            "--connector".to_string(),
+            "fixtures/config_samples/connectors/orders_append.toml".to_string(),
+            "--bogus".to_string(),
+        ])
+        .expect_err("unknown connector run argument should fail");
+
+        assert_eq!(err.to_string(), "unknown connector run argument: --bogus");
     }
 }
