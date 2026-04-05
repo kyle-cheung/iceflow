@@ -16,6 +16,9 @@ impl Cli {
         CommandSpec::new("iceflow")
             .with_subcommand(CommandSpec::new("run"))
             .with_subcommand(CommandSpec::new("compact"))
+            .with_subcommand(
+                CommandSpec::new("connector").with_subcommand(CommandSpec::new("check")),
+            )
             .with_subcommand(CommandSpec::new("source").with_subcommand(CommandSpec::new("check")))
     }
 
@@ -37,6 +40,7 @@ impl Cli {
             "compact" => Ok(Commands::Compact(commands::compact::Args::parse(
                 remaining,
             )?)),
+            "connector" => parse_connector_subcommand(remaining),
             "source" => parse_source_subcommand(remaining),
             other => Err(Error::msg(format!("unknown subcommand: {other}"))),
         }
@@ -47,6 +51,7 @@ impl Cli {
 pub enum Commands {
     Run(commands::run::Args),
     Compact(commands::compact::Args),
+    ConnectorCheck(commands::connector_cmd::CheckArgs),
     SourceCheck(commands::source_cmd::Args),
 }
 
@@ -105,11 +110,29 @@ pub fn run_env() -> Result<()> {
             println!("{}", report.to_json());
             Ok(())
         }
+        Commands::ConnectorCheck(args) => {
+            let report = commands::connector_cmd::check_blocking(args)?;
+            println!("{}", report.to_json());
+            Ok(())
+        }
         Commands::SourceCheck(args) => {
             let report = commands::source_cmd::execute_blocking(args)?;
             println!("{}", commands::source_cmd::format_report_json(&report));
             Ok(())
         }
+    }
+}
+
+fn parse_connector_subcommand(args: Vec<String>) -> Result<Commands> {
+    let Some(subcommand) = args.first() else {
+        return Err(Error::msg("expected a connector subcommand"));
+    };
+
+    match subcommand.as_str() {
+        "check" => Ok(Commands::ConnectorCheck(
+            commands::connector_cmd::CheckArgs::parse(&args[1..])?,
+        )),
+        other => Err(Error::msg(format!("unknown connector subcommand: {other}"))),
     }
 }
 
@@ -184,7 +207,51 @@ mod tests {
             .any(|subcommand| subcommand.get_name() == "compact"));
         assert!(cmd
             .get_subcommands()
+            .any(|subcommand| subcommand.get_name() == "connector"));
+        assert!(cmd
+            .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "source"));
+    }
+
+    #[test]
+    fn cli_parses_connector_check_subcommand() {
+        let parsed = crate::Cli::parse_from([
+            "iceflow",
+            "connector",
+            "check",
+            "--connector",
+            "fixtures/config_samples/connectors/orders_append.toml",
+        ])
+        .expect("parsed command");
+
+        assert!(matches!(
+            parsed,
+            crate::Commands::ConnectorCheck(crate::commands::connector_cmd::CheckArgs { .. })
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_connector_check_without_connector_flag() {
+        let err = crate::Cli::parse_from(["iceflow", "connector", "check"])
+            .expect_err("missing --connector should fail");
+
+        assert_eq!(err.to_string(), "--connector <path> is required");
+    }
+
+    #[test]
+    fn cli_rejects_unknown_connector_subcommand() {
+        let err = crate::Cli::parse_from(["iceflow", "connector", "inspect"])
+            .expect_err("unknown connector subcommand should fail");
+
+        assert_eq!(err.to_string(), "unknown connector subcommand: inspect");
+    }
+
+    #[test]
+    fn cli_rejects_connector_without_subcommand() {
+        let err = crate::Cli::parse_from(["iceflow", "connector"])
+            .expect_err("missing connector subcommand");
+
+        assert_eq!(err.to_string(), "expected a connector subcommand");
     }
 
     #[test]

@@ -5,6 +5,7 @@ mod compact_catalog;
 mod compact_history;
 
 pub mod compact;
+pub mod connector_cmd;
 pub mod run;
 pub mod source_cmd;
 
