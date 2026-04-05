@@ -94,6 +94,9 @@ pub(crate) fn last_durable_checkpoint_for_table(
     conn: &Connection,
     table_id: &TableId,
 ) -> Result<Option<SourceCheckpoint>> {
+    // Resume must prefer the newest produced batch for a table. Checkpoint link
+    // timestamps reflect control-plane timing and can lag behind batch creation
+    // if an older batch is durably acknowledged later than a newer one.
     let mut stmt = conn.prepare(
         "
         SELECT cl.source_id, cl.checkpoint_id
@@ -101,7 +104,7 @@ pub(crate) fn last_durable_checkpoint_for_table(
         INNER JOIN batches b ON b.batch_id = cl.batch_id
         WHERE b.table_id = ?1
           AND cl.ack_status = 'durable'
-        ORDER BY cl.linked_at_secs DESC, cl.linked_at_nanos DESC, cl.rowid DESC
+        ORDER BY b.created_at_secs DESC, b.created_at_nanos DESC, b.rowid DESC, cl.rowid DESC
         LIMIT 1
         ",
     )?;
