@@ -90,6 +90,126 @@ fn durable_checkpoint_is_only_recorded_after_ack() -> Result<()> {
 }
 
 #[test]
+fn last_durable_checkpoint_for_table_returns_none_without_durable_checkpoints() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+        let batch_id = store.register_batch(sample_manifest()).await?;
+        let attempt = store
+            .begin_commit(batch_id.clone(), sample_commit_request())
+            .await?;
+
+        store
+            .resolve_commit(attempt.id, AttemptResolution::Committed)
+            .await?;
+
+        assert_eq!(
+            store
+                .last_durable_checkpoint_for_table(&TableId::from("customer_state"))
+                .await?,
+            None
+        );
+        assert_eq!(
+            store
+                .last_durable_checkpoint_for_table(&TableId::from("other_table"))
+                .await?,
+            None
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn last_durable_checkpoint_for_table_returns_most_recent() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+
+        let first_manifest = sample_manifest_for("batch-0001", "customer_state", "cp-1", "cp-2", 3);
+        let first_batch_id = store.register_batch(first_manifest).await?;
+        durable_checkpoint_batch(
+            &store,
+            &first_batch_id,
+            checkpoint("cp-2"),
+            "delta://customer_state/version/42",
+        )
+        .await?;
+
+        let second_manifest =
+            sample_manifest_for("batch-0002", "customer_state", "cp-2", "cp-3", 4);
+        let second_batch_id = store.register_batch(second_manifest).await?;
+        durable_checkpoint_batch(
+            &store,
+            &second_batch_id,
+            checkpoint("cp-3"),
+            "delta://customer_state/version/43",
+        )
+        .await?;
+
+        assert_eq!(
+            store
+                .last_durable_checkpoint_for_table(&TableId::from("customer_state"))
+                .await?,
+            Some(checkpoint_ref("source-a", checkpoint("cp-3")))
+        );
+        assert_eq!(
+            store
+                .last_durable_checkpoint_for_table(&TableId::from("other_table"))
+                .await?,
+            None
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn last_durable_checkpoint_for_table_prefers_newer_batch_over_later_link_time() -> Result<()> {
+    block_on(async {
+        let store = TestStateStore::new().await?;
+
+        let first_batch_id = store
+            .register_batch(sample_manifest_for(
+                "batch-0001",
+                "customer_state",
+                "cp-1",
+                "cp-2",
+                3,
+            ))
+            .await?;
+        let second_batch_id = store
+            .register_batch(sample_manifest_for(
+                "batch-0002",
+                "customer_state",
+                "cp-2",
+                "cp-3",
+                4,
+            ))
+            .await?;
+
+        durable_checkpoint_batch(
+            &store,
+            &second_batch_id,
+            checkpoint("cp-3"),
+            "delta://customer_state/version/43",
+        )
+        .await?;
+        durable_checkpoint_batch(
+            &store,
+            &first_batch_id,
+            checkpoint("cp-2"),
+            "delta://customer_state/version/42",
+        )
+        .await?;
+
+        assert_eq!(
+            store
+                .last_durable_checkpoint_for_table(&TableId::from("customer_state"))
+                .await?,
+            Some(checkpoint_ref("source-a", checkpoint("cp-3")))
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn resolving_attempts_are_recovery_candidates() -> Result<()> {
     block_on(async {
         let store = TestStateStore::new().await?;
@@ -247,14 +367,24 @@ fn sample_snapshot() -> SnapshotRef {
 }
 
 fn sample_manifest() -> BatchManifest {
+    sample_manifest_for("batch-0001", "customer_state", "cp-1", "cp-2", 3)
+}
+
+fn sample_manifest_for(
+    batch_id: &str,
+    table_id: &str,
+    checkpoint_start: &str,
+    checkpoint_end: &str,
+    created_at_offset_secs: u64,
+) -> BatchManifest {
     BatchManifest {
-        batch_id: BatchId::from("batch-0001"),
-        table_id: TableId::from("customer_state"),
+        batch_id: BatchId::from(batch_id),
+        table_id: TableId::from(table_id),
         table_mode: TableMode::KeyedUpsert,
         source_id: "source-a".to_string(),
         source_class: SourceClass::DatabaseCdc,
-        source_checkpoint_start: checkpoint("cp-1"),
-        source_checkpoint_end: checkpoint("cp-2"),
+        source_checkpoint_start: checkpoint(checkpoint_start),
+        source_checkpoint_end: checkpoint(checkpoint_end),
         ordering_field: "source_position".to_string(),
         ordering_min: 1,
         ordering_max: 7,
@@ -263,20 +393,51 @@ fn sample_manifest() -> BatchManifest {
         record_count: 2,
         op_counts: BTreeMap::from([(Operation::Upsert, 2)]),
         file_set: vec![ManifestFile {
-            file_uri: "file:///tmp/batch-0001.parquet".to_string(),
+            file_uri: format!("file:///tmp/{batch_id}.parquet"),
             file_kind: "parquet".to_string(),
-            content_hash: "hash-a".to_string(),
+            content_hash: format!("hash-{batch_id}"),
             file_size_bytes: 128,
             record_count: 2,
-            created_at: fixed_time(1),
+            created_at: fixed_time(created_at_offset_secs),
         }],
-        content_hash: "content-hash".to_string(),
-        created_at: fixed_time(3),
+        content_hash: format!("content-hash-{batch_id}"),
+        created_at: fixed_time(created_at_offset_secs),
     }
 }
 
 fn fixed_time(offset_secs: u64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(offset_secs as i64, 0).expect("valid timestamp")
+}
+
+async fn durable_checkpoint_batch(
+    store: &TestStateStore,
+    batch_id: &BatchId,
+    checkpoint_id: iceflow_types::CheckpointId,
+    snapshot_uri: &str,
+) -> Result<()> {
+    let attempt = store
+        .begin_commit(batch_id.clone(), sample_commit_request())
+        .await?;
+    let snapshot = SnapshotRef {
+        uri: snapshot_uri.to_string(),
+    };
+
+    store
+        .resolve_commit(attempt.id, AttemptResolution::Committed)
+        .await?;
+    store
+        .link_checkpoint_pending(
+            batch_id.clone(),
+            checkpoint_ref("source-a", checkpoint_id.clone()),
+            snapshot.clone(),
+        )
+        .await?;
+    store
+        .mark_checkpoint_durable(
+            batch_id.clone(),
+            checkpoint_ack("source-a", checkpoint_id, snapshot),
+        )
+        .await
 }
 
 fn block_on<F>(future: F) -> F::Output

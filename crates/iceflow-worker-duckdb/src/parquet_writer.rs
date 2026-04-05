@@ -46,7 +46,8 @@ pub fn materialize_batch(
     config: &WriterConfig,
     normalized: NormalizedBatch,
 ) -> Result<MaterializedBatch> {
-    let batch_id = batch_id_from_batch_file(normalized.batch_file());
+    let content_hash = batch_content_hash(normalized.records());
+    let batch_id = batch_id_from_batch_label(normalized.batch_label(), &content_hash);
     let created_at = Utc::now();
     let output_dir = create_output_dir(batch_id.as_str())?;
     let average_record_bytes = average_record_bytes(normalized.records());
@@ -92,7 +93,7 @@ pub fn materialize_batch(
         record_count: normalized.record_count() as u64,
         op_counts: op_counts(normalized.records()),
         file_set,
-        content_hash: batch_content_hash(normalized.records()),
+        content_hash,
         created_at,
     };
 
@@ -511,12 +512,16 @@ fn value_type(value: &Value) -> &'static str {
     }
 }
 
-fn batch_id_from_batch_file(batch_file: &str) -> BatchId {
-    let stem = Path::new(batch_file)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("batch");
-    BatchId::from(stem.to_string())
+fn batch_id_from_batch_label(batch_label: Option<&str>, content_hash: &str) -> BatchId {
+    if let Some(batch_label) = batch_label {
+        let stem = Path::new(batch_label)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("batch");
+        return BatchId::from(stem.to_string());
+    }
+
+    BatchId::from(format!("batch-{content_hash}"))
 }
 
 fn create_output_dir(batch_id: &str) -> Result<PathBuf> {
@@ -734,6 +739,18 @@ mod tests {
     }
 
     #[test]
+    fn parquet_writer_uses_content_hash_when_batch_label_is_missing() {
+        let worker = DuckDbWorker::in_memory().expect("worker");
+        let output =
+            run_ready(worker.materialize(sample_label_less_batch())).expect("materialized batch");
+
+        assert_eq!(
+            output.manifest.batch_id.as_str(),
+            format!("batch-{}", output.manifest.content_hash)
+        );
+    }
+
+    #[test]
     fn json_text_escapes_all_control_characters() {
         let value = serde_json::Value::String("bad\u{0008}\u{000c}\u{0001}\n\r\t".to_string());
 
@@ -750,7 +767,9 @@ mod tests {
 
     fn sample_customer_state_batch() -> SourceBatch {
         SourceBatch {
-            batch_file: "fixtures/customer_state/batch-0003.jsonl".to_string(),
+            batch_label: Some("fixtures/customer_state/batch-0003.jsonl".to_string()),
+            checkpoint_start: Some(checkpoint("cp-1")),
+            checkpoint_end: checkpoint("cp-10000"),
             records: vec![
                 customer_upsert(7, 1, Some(json!({ "customer_id": 7, "status": "trial" }))),
                 customer_upsert(
@@ -765,7 +784,22 @@ mod tests {
 
     fn sample_append_only_batch() -> SourceBatch {
         SourceBatch {
-            batch_file: "fixtures/orders/batch-0001.jsonl".to_string(),
+            batch_label: Some("fixtures/orders/batch-0001.jsonl".to_string()),
+            checkpoint_start: Some(checkpoint("cp-11")),
+            checkpoint_end: checkpoint("cp-13"),
+            records: vec![
+                append_insert(1, 11),
+                append_insert(2, 12),
+                append_insert(3, 13),
+            ],
+        }
+    }
+
+    fn sample_label_less_batch() -> SourceBatch {
+        SourceBatch {
+            batch_label: None,
+            checkpoint_start: Some(checkpoint("cp-11")),
+            checkpoint_end: checkpoint("cp-13"),
             records: vec![
                 append_insert(1, 11),
                 append_insert(2, 12),

@@ -3,6 +3,7 @@ use crate::sqlite::{step_done, step_row, Connection};
 use crate::{BatchFile, BatchId, SourceCheckpoint};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use iceflow_types::TableId;
 
 pub(crate) fn list_recovery_candidates(conn: &Connection) -> Result<Vec<BatchId>> {
     let mut stmt = conn.prepare(
@@ -76,6 +77,38 @@ pub(crate) fn durable_checkpoint(
         ",
     )?;
     stmt.bind_text(1, batch_id.as_str())?;
+
+    if step_row(&mut stmt)? {
+        let checkpoint = Some(SourceCheckpoint {
+            source_id: stmt.column_text(0)?,
+            checkpoint: stmt.column_text(1)?.into(),
+        });
+        step_done(&mut stmt)?;
+        Ok(checkpoint)
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn last_durable_checkpoint_for_table(
+    conn: &Connection,
+    table_id: &TableId,
+) -> Result<Option<SourceCheckpoint>> {
+    // Resume must prefer the newest produced batch for a table. Checkpoint link
+    // timestamps reflect control-plane timing and can lag behind batch creation
+    // if an older batch is durably acknowledged later than a newer one.
+    let mut stmt = conn.prepare(
+        "
+        SELECT cl.source_id, cl.checkpoint_id
+        FROM checkpoint_links cl
+        INNER JOIN batches b ON b.batch_id = cl.batch_id
+        WHERE b.table_id = ?1
+          AND cl.ack_status = 'durable'
+        ORDER BY b.created_at_secs DESC, b.created_at_nanos DESC, b.rowid DESC, cl.rowid DESC
+        LIMIT 1
+        ",
+    )?;
+    stmt.bind_text(1, table_id.as_str())?;
 
     if step_row(&mut stmt)? {
         let checkpoint = Some(SourceCheckpoint {

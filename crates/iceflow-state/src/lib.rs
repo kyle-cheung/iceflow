@@ -5,7 +5,7 @@ mod sqlite;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use iceflow_types::{BatchId, BatchManifest, CheckpointId, CommitAttemptId};
+use iceflow_types::{BatchId, BatchManifest, CheckpointId, CommitAttemptId, TableId};
 
 pub use sqlite::{SqliteStateStore, TestStateStore};
 
@@ -125,6 +125,10 @@ pub trait StateStore {
         snapshot: SnapshotRef,
     ) -> Result<()>;
     async fn mark_checkpoint_durable(&self, batch_id: BatchId, ack: CheckpointAck) -> Result<()>;
+    async fn last_durable_checkpoint_for_table(
+        &self,
+        table_id: &TableId,
+    ) -> Result<Option<SourceCheckpoint>>;
     async fn mark_quarantine(&self, batch_id: BatchId, reason: QuarantineReason) -> Result<()>;
     async fn list_recovery_candidates(&self) -> Result<Vec<BatchId>>;
     async fn list_orphan_candidates(&self) -> Result<Vec<BatchFile>>;

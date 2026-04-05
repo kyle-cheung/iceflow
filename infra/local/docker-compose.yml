@@ -58,7 +58,7 @@ services:
     entrypoint: ["/bin/sh", "/workspace/infra/local/object-store-probe.sh"]
 
   polaris:
-    image: ${POLARIS_IMAGE:-apache/polaris:1.3.0}
+    image: ${POLARIS_IMAGE:-apache/polaris:1.3.0-incubating}
     depends_on:
       object-store-init:
         condition: service_completed_successfully

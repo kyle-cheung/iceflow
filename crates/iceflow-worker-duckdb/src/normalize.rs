@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedBatch {
-    batch_file: String,
+    batch_label: Option<String>,
     table_id: TableId,
     table_mode: TableMode,
     source_id: String,
@@ -22,8 +22,8 @@ pub struct NormalizedBatch {
 }
 
 impl NormalizedBatch {
-    pub fn batch_file(&self) -> &str {
-        &self.batch_file
+    pub fn batch_label(&self) -> Option<&str> {
+        self.batch_label.as_deref()
     }
 
     pub fn table_id(&self) -> &TableId {
@@ -76,7 +76,13 @@ impl NormalizedBatch {
 }
 
 pub fn normalize_batch(batch: SourceBatch) -> Result<NormalizedBatch> {
-    let mut records = batch.records;
+    let SourceBatch {
+        batch_label,
+        checkpoint_start,
+        checkpoint_end,
+        records: batch_records,
+    } = batch;
+    let mut records = batch_records;
     let first = records
         .first()
         .ok_or_else(|| Error::msg("source batch must contain at least one record"))?
@@ -84,8 +90,6 @@ pub fn normalize_batch(batch: SourceBatch) -> Result<NormalizedBatch> {
 
     let mut ordering_min = first.ordering_value;
     let mut ordering_max = first.ordering_value;
-    let mut source_checkpoint_start = first.source_checkpoint.clone();
-    let mut source_checkpoint_end = first.source_checkpoint.clone();
 
     for record in &records {
         if record.table_id != first.table_id {
@@ -109,13 +113,15 @@ pub fn normalize_batch(batch: SourceBatch) -> Result<NormalizedBatch> {
 
         if record.ordering_value < ordering_min {
             ordering_min = record.ordering_value;
-            source_checkpoint_start = record.source_checkpoint.clone();
         }
         if record.ordering_value > ordering_max {
             ordering_max = record.ordering_value;
-            source_checkpoint_end = record.source_checkpoint.clone();
         }
     }
+
+    // A missing start means the source treats the batch as a single-point durable range.
+    let source_checkpoint_start = checkpoint_start.unwrap_or_else(|| checkpoint_end.clone());
+    let source_checkpoint_end = checkpoint_end;
 
     if first.table_mode == TableMode::KeyedUpsert {
         let mut last_ordering_by_key: BTreeMap<String, i64> = BTreeMap::new();
@@ -132,7 +138,7 @@ pub fn normalize_batch(batch: SourceBatch) -> Result<NormalizedBatch> {
     }
 
     Ok(NormalizedBatch {
-        batch_file: batch.batch_file,
+        batch_label,
         table_id: first.table_id,
         table_mode: first.table_mode,
         source_id: first.source_id,
@@ -219,6 +225,22 @@ mod tests {
     }
 
     #[test]
+    fn normalize_uses_batch_level_checkpoint_bounds() {
+        let worker = DuckDbWorker::in_memory().expect("worker");
+        let batch = SourceBatch {
+            batch_label: Some("test-batch".to_string()),
+            checkpoint_start: Some(checkpoint("cp-start")),
+            checkpoint_end: checkpoint("cp-end"),
+            records: vec![append_insert(1, 11), append_insert(2, 12)],
+        };
+        let normalized = run_ready(worker.normalize(batch)).expect("normalized batch");
+
+        assert_eq!(normalized.source_checkpoint_start().as_str(), "cp-start");
+        assert_eq!(normalized.source_checkpoint_end().as_str(), "cp-end");
+        assert_eq!(normalized.batch_label(), Some("test-batch"));
+    }
+
+    #[test]
     fn append_only_normalize_preserves_records_and_bounds() {
         let worker = DuckDbWorker::in_memory().expect("worker");
         let normalized =
@@ -229,6 +251,10 @@ mod tests {
         assert_eq!(normalized.ordering_max(), 13);
         assert_eq!(normalized.source_checkpoint_start().as_str(), "cp-11");
         assert_eq!(normalized.source_checkpoint_end().as_str(), "cp-13");
+        assert_eq!(
+            normalized.batch_label(),
+            Some("fixtures/orders/batch-0001.jsonl")
+        );
         assert_eq!(normalized.records()[0].ordering_value, 11);
         assert_eq!(normalized.records()[1].ordering_value, 12);
         assert_eq!(normalized.records()[2].ordering_value, 13);
@@ -236,7 +262,9 @@ mod tests {
 
     fn sample_keyed_batch() -> SourceBatch {
         SourceBatch {
-            batch_file: "fixtures/customer_state/batch-0001.jsonl".to_string(),
+            batch_label: Some("fixtures/customer_state/batch-0001.jsonl".to_string()),
+            checkpoint_start: Some(checkpoint("cp-10")),
+            checkpoint_end: checkpoint("cp-20"),
             records: vec![
                 keyed_upsert(1, 10, Some(json!({ "customer_id": 1, "status": "trial" }))),
                 keyed_upsert(2, 15, Some(json!({ "customer_id": 2, "status": "active" }))),
@@ -251,14 +279,18 @@ mod tests {
         second.ordering_field = "lsn".to_string();
 
         SourceBatch {
-            batch_file: "fixtures/customer_state/batch-0002.jsonl".to_string(),
+            batch_label: Some("fixtures/customer_state/batch-0002.jsonl".to_string()),
+            checkpoint_start: Some(checkpoint("cp-10")),
+            checkpoint_end: checkpoint("cp-11"),
             records: vec![first, second],
         }
     }
 
     fn sample_interleaved_key_batch() -> SourceBatch {
         SourceBatch {
-            batch_file: "fixtures/customer_state/batch-0003.jsonl".to_string(),
+            batch_label: Some("fixtures/customer_state/batch-0003.jsonl".to_string()),
+            checkpoint_start: Some(checkpoint("cp-10")),
+            checkpoint_end: checkpoint("cp-20"),
             records: vec![
                 keyed_upsert(1, 10, Some(json!({ "customer_id": 1, "status": "trial" }))),
                 keyed_upsert(2, 20, Some(json!({ "customer_id": 2, "status": "active" }))),
@@ -269,7 +301,9 @@ mod tests {
 
     fn sample_append_only_batch() -> SourceBatch {
         SourceBatch {
-            batch_file: "fixtures/orders/batch-0001.jsonl".to_string(),
+            batch_label: Some("fixtures/orders/batch-0001.jsonl".to_string()),
+            checkpoint_start: Some(checkpoint("cp-11")),
+            checkpoint_end: checkpoint("cp-13"),
             records: vec![
                 append_insert(1, 11),
                 append_insert(2, 12),

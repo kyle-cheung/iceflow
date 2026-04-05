@@ -1,0 +1,10 @@
+version = 1
+source = "local_file"
+destination = "local_fs"
+
+[[tables]]
+source_schema = ""
+source_table = "orders_events"
+destination_namespace = "orders_events"
+destination_table = "orders_events"
+table_mode = "append_only"

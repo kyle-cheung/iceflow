@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Error, Result};
 use chrono::{DateTime, Utc};
-use iceflow_types::{BatchId, BatchManifest, CommitAttemptId};
+use iceflow_types::{BatchId, BatchManifest, CommitAttemptId, TableId};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -409,6 +409,14 @@ impl StateStore for SqliteStateStore {
             update_batch_status(transaction, batch_id.as_str(), BatchStatus::Checkpointed)?;
             Ok(())
         })
+    }
+
+    async fn last_durable_checkpoint_for_table(
+        &self,
+        table_id: &TableId,
+    ) -> Result<Option<SourceCheckpoint>> {
+        let conn = Connection::open(&self.path)?;
+        reconcile::last_durable_checkpoint_for_table(&conn, table_id)
     }
 
     async fn mark_quarantine(&self, batch_id: BatchId, reason: QuarantineReason) -> Result<()> {

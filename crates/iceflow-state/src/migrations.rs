@@ -94,6 +94,9 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX IF NOT EXISTS idx_batches_status ON batches(batch_status);
     ",
     "
+    CREATE INDEX IF NOT EXISTS idx_batches_table_id ON batches(table_id);
+    ",
+    "
     CREATE INDEX IF NOT EXISTS idx_attempts_batch_status ON commit_attempts(batch_id, attempt_status);
     ",
 ];
