@@ -107,7 +107,7 @@ pub fn run_env() -> Result<()> {
         }
         Commands::SourceCheck(args) => {
             let report = commands::source_cmd::execute_blocking(args)?;
-            println!("{report:?}");
+            println!("{}", commands::source_cmd::format_report_json(&report));
             Ok(())
         }
     }
@@ -202,6 +202,30 @@ mod tests {
             parsed,
             crate::Commands::SourceCheck(crate::commands::source_cmd::Args { .. })
         ));
+    }
+
+    #[test]
+    fn cli_rejects_source_check_without_source_flag() {
+        let err = crate::Cli::parse_from(["iceflow", "source", "check"])
+            .expect_err("missing --source should fail");
+
+        assert_eq!(err.to_string(), "--source <path> is required");
+    }
+
+    #[test]
+    fn cli_rejects_unknown_source_subcommand() {
+        let err = crate::Cli::parse_from(["iceflow", "source", "discover"])
+            .expect_err("unknown source subcommand should fail");
+
+        assert_eq!(err.to_string(), "unknown source subcommand: discover");
+    }
+
+    #[test]
+    fn cli_rejects_source_without_subcommand() {
+        let err =
+            crate::Cli::parse_from(["iceflow", "source"]).expect_err("missing source subcommand");
+
+        assert_eq!(err.to_string(), "expected a source subcommand");
     }
 
     #[test]
