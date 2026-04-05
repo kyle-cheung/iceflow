@@ -276,13 +276,20 @@ struct RoutedFileCaptureSession {
 impl SourceCaptureSession for RoutedFileCaptureSession {
     async fn poll_batch(&mut self, req: BatchRequest) -> Result<BatchPoll> {
         match self.inner.poll_batch(req).await? {
-            BatchPoll::Batch(mut batch) => {
-                for record in &mut batch.records {
-                    record.table_id = self.outer_table_id.clone();
-                    record.source_id = self.outer_source_id.clone();
-                }
-                Ok(BatchPoll::Batch(batch))
-            }
+            BatchPoll::Batch(batch) => Ok(BatchPoll::Batch(iceflow_source::SourceBatch {
+                batch_label: batch.batch_label,
+                checkpoint_start: batch.checkpoint_start,
+                checkpoint_end: batch.checkpoint_end,
+                records: batch
+                    .records
+                    .into_iter()
+                    .map(|record| iceflow_types::LogicalMutation {
+                        table_id: self.outer_table_id.clone(),
+                        source_id: self.outer_source_id.clone(),
+                        ..record
+                    })
+                    .collect(),
+            })),
             other => Ok(other),
         }
     }

@@ -53,6 +53,12 @@ pub struct RunReport {
     pub total_committed_files: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TableRunStats {
+    committed_batches: usize,
+    committed_files: usize,
+}
+
 impl CheckArgs {
     pub fn parse(args: &[String]) -> Result<Self> {
         let connector_config = args
@@ -317,6 +323,10 @@ where
             &table_id,
         )
         .map_err(|err| Error::msg(format!("build sink '{}': {err}", connector.destination)))?;
+        // connector run uses a single global batch limit across all configured tables.
+        let remaining_batch_limit = args
+            .batch_limit
+            .map(|limit| limit.saturating_sub(total_committed_batches));
 
         let mut session = source
             .open_capture(OpenCaptureRequest {
@@ -338,9 +348,12 @@ where
         tables_processed += 1;
 
         let table_result = async {
+            let mut committed_batches = 0;
+            let mut committed_files = 0;
+
             loop {
-                if let Some(limit) = args.batch_limit {
-                    if total_committed_batches >= limit {
+                if let Some(limit) = remaining_batch_limit {
+                    if committed_batches >= limit {
                         break;
                     }
                 }
@@ -451,15 +464,20 @@ where
                     )
                     .await?;
 
-                total_committed_batches += 1;
-                total_committed_files += manifest.file_set.len();
+                committed_batches += 1;
+                committed_files += manifest.file_set.len();
             }
 
-            Ok::<(), anyhow::Error>(())
+            Ok::<TableRunStats, anyhow::Error>(TableRunStats {
+                committed_batches,
+                committed_files,
+            })
         }
         .await;
 
-        finalize_run_result(table_result, session.close().await)?;
+        let table_stats = finalize_run_result(table_result, session.close().await)?;
+        total_committed_batches += table_stats.committed_batches;
+        total_committed_files += table_stats.committed_files;
     }
 
     Ok(RunReport {
