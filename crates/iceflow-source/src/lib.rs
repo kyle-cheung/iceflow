@@ -3,9 +3,7 @@ pub mod capture;
 mod file_source;
 mod validation;
 
-pub use adapter::{
-    SourceAdapter, SourceCapability, SourceCheckReport, SourceSpec,
-};
+pub use adapter::{SourceAdapter, SourceCapability, SourceCheckReport, SourceSpec};
 pub use capture::{
     BatchPoll, BatchRequest, CheckpointAck, OpenCaptureRequest, SourceBatch, SourceCaptureSession,
     SourceTableSelection,

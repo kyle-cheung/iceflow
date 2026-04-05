@@ -16,10 +16,8 @@ fn file_source_emits_monotonic_ordering_for_customer_state() -> Result<()> {
     let check = block_on(source.check())?;
     assert!(check.capabilities.contains(&SourceCapability::KeyedUpsert));
 
-    let mut session = block_on(source.open_capture(capture_request(
-        "customer_state",
-        TableMode::KeyedUpsert,
-    )))?;
+    let mut session =
+        block_on(source.open_capture(capture_request("customer_state", TableMode::KeyedUpsert)))?;
     let batch = expect_batch(&mut session)?;
 
     assert!(is_monotonic(
@@ -56,10 +54,8 @@ fn file_source_discovers_append_only_orders_events() -> Result<()> {
 #[test]
 fn file_source_rejects_checkpoint_regression() -> Result<()> {
     let source = FileSource::from_fixture_dir(fixture_dir("customer_state"));
-    let mut session = block_on(source.open_capture(capture_request(
-        "customer_state",
-        TableMode::KeyedUpsert,
-    )))?;
+    let mut session =
+        block_on(source.open_capture(capture_request("customer_state", TableMode::KeyedUpsert)))?;
 
     block_on(session.checkpoint(CheckpointAck {
         source_id: "file.customer_state".to_string(),
@@ -81,10 +77,8 @@ fn file_source_rejects_checkpoint_regression() -> Result<()> {
 #[test]
 fn file_source_preserves_delete_records_in_customer_state() -> Result<()> {
     let source = FileSource::from_fixture_dir(fixture_dir("customer_state"));
-    let mut session = block_on(source.open_capture(capture_request(
-        "customer_state",
-        TableMode::KeyedUpsert,
-    )))?;
+    let mut session =
+        block_on(source.open_capture(capture_request("customer_state", TableMode::KeyedUpsert)))?;
     let _first = expect_batch(&mut session)?;
     let second = expect_batch(&mut session)?;
 
@@ -98,10 +92,8 @@ fn file_source_preserves_delete_records_in_customer_state() -> Result<()> {
 #[test]
 fn source_adapter_snapshot_by_batch_index_is_deterministic() -> Result<()> {
     let source = FileSource::from_fixture_dir(fixture_dir("orders_events"));
-    let mut session = block_on(source.open_capture(capture_request(
-        "orders_events",
-        TableMode::AppendOnly,
-    )))?;
+    let mut session =
+        block_on(source.open_capture(capture_request("orders_events", TableMode::AppendOnly)))?;
 
     let _first = expect_batch(&mut session)?;
     let batch = expect_batch(&mut session)?;

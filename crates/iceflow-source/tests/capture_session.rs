@@ -40,7 +40,9 @@ fn file_source_check_reports_capabilities() -> Result<()> {
     let source = FileSource::from_fixture_dir(fixture_dir("orders_events"));
     let report = block_on(source.check())?;
 
-    assert!(report.capabilities.contains(&SourceCapability::InitialSnapshot));
+    assert!(report
+        .capabilities
+        .contains(&SourceCapability::InitialSnapshot));
     assert!(report.capabilities.contains(&SourceCapability::Resume));
     assert!(!report.capabilities.contains(&SourceCapability::ChangeFeed));
     assert!(report.warnings.is_empty());

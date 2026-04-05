@@ -1,9 +1,7 @@
-use crate::adapter::{
-    SourceAdapter, SourceCapability, SourceCheckReport, SourceSpec,
-};
+use crate::adapter::{SourceAdapter, SourceCapability, SourceCheckReport, SourceSpec};
 use crate::capture::{
-    BatchPoll, BatchRequest, CheckpointAck, OpenCaptureRequest, SourceBatch,
-    SourceCaptureSession, SourceTableSelection,
+    BatchPoll, BatchRequest, CheckpointAck, OpenCaptureRequest, SourceBatch, SourceCaptureSession,
+    SourceTableSelection,
 };
 use crate::validate_source_spec;
 use anyhow::{Error, Result};
@@ -198,8 +196,7 @@ impl FileSource {
         if table.table_id.as_str() != self.table_id {
             return Err(Error::msg(format!(
                 "table_id does not match file source: expected {}, got {}",
-                self.table_id,
-                table.table_id
+                self.table_id, table.table_id
             )));
         }
         if !table.source_schema.is_empty() {
@@ -367,8 +364,9 @@ fn load_records(
             continue;
         }
 
-        let parsed = parse_json_value(line)
-            .map_err(|err| Error::msg(format!("{}:{}: {err}", batch_file.display(), line_no + 1)))?;
+        let parsed = parse_json_value(line).map_err(|err| {
+            Error::msg(format!("{}:{}: {err}", batch_file.display(), line_no + 1))
+        })?;
         let record = record_from_value(
             source_id,
             table_id,

@@ -741,8 +741,8 @@ mod tests {
     #[test]
     fn parquet_writer_uses_content_hash_when_batch_label_is_missing() {
         let worker = DuckDbWorker::in_memory().expect("worker");
-        let output = run_ready(worker.materialize(sample_label_less_batch()))
-            .expect("materialized batch");
+        let output =
+            run_ready(worker.materialize(sample_label_less_batch())).expect("materialized batch");
 
         assert_eq!(
             output.manifest.batch_id.as_str(),
