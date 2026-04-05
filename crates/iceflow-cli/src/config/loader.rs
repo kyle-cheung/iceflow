@@ -5,24 +5,30 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub fn load_source_config(path: &Path) -> Result<SourceConfig> {
-    let mut config: SourceConfig = load_toml_config(path, "source")?;
+    let config: SourceConfig = load_toml_config(path, "source")?;
     validate_config_version("source", config.version)?;
-    resolve_env_vars(&mut config.properties)?;
-    Ok(config)
+    Ok(SourceConfig {
+        properties: resolve_env_vars(config.properties)?,
+        ..config
+    })
 }
 
 pub fn load_destination_config(path: &Path) -> Result<DestinationConfig> {
-    let mut config: DestinationConfig = load_toml_config(path, "destination")?;
+    let config: DestinationConfig = load_toml_config(path, "destination")?;
     validate_config_version("destination", config.version)?;
-    resolve_env_vars(&mut config.properties)?;
-    Ok(config)
+    Ok(DestinationConfig {
+        properties: resolve_env_vars(config.properties)?,
+        ..config
+    })
 }
 
 pub fn load_catalog_config(path: &Path) -> Result<CatalogConfig> {
-    let mut config: CatalogConfig = load_toml_config(path, "catalog")?;
+    let config: CatalogConfig = load_toml_config(path, "catalog")?;
     validate_config_version("catalog", config.version)?;
-    resolve_env_vars(&mut config.properties)?;
-    Ok(config)
+    Ok(CatalogConfig {
+        properties: resolve_env_vars(config.properties)?,
+        ..config
+    })
 }
 
 pub fn load_connector_config(path: &Path) -> Result<ConnectorConfig> {
@@ -58,16 +64,77 @@ fn validate_config_version(label: &str, version: u32) -> Result<()> {
     Ok(())
 }
 
-fn resolve_env_vars(properties: &mut BTreeMap<String, String>) -> Result<()> {
-    for (key, value) in properties.iter_mut() {
-        if let Some(var_name) = value.strip_prefix('$') {
-            let resolved = std::env::var(var_name).map_err(|_| {
-                Error::msg(format!(
-                    "config property '{key}' references environment variable '{var_name}' which is not set"
-                ))
-            })?;
-            *value = resolved;
-        }
+fn resolve_env_vars(properties: BTreeMap<String, String>) -> Result<BTreeMap<String, String>> {
+    resolve_env_vars_with(properties, |var_name| {
+        std::env::var(var_name).map_err(|err| err.to_string())
+    })
+}
+
+fn resolve_env_vars_with<F>(
+    properties: BTreeMap<String, String>,
+    mut resolve: F,
+) -> Result<BTreeMap<String, String>>
+where
+    F: FnMut(&str) -> std::result::Result<String, String>,
+{
+    properties
+        .into_iter()
+        .map(|(key, value)| {
+            let resolved = if let Some(literal) = value.strip_prefix("$$") {
+                format!("${literal}")
+            } else if let Some(var_name) = value.strip_prefix('$') {
+                resolve(var_name).map_err(|err| {
+                    Error::msg(format!(
+                        "config property '{key}' references environment variable '{var_name}' which could not be loaded: {err}"
+                    ))
+                })?
+            } else {
+                value
+            };
+            Ok((key, resolved))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_env_vars_with_substitutes_referenced_values() -> Result<()> {
+        let properties = BTreeMap::from([("host".to_string(), "$TEST_PG_HOST".to_string())]);
+
+        let resolved = resolve_env_vars_with(properties, |var_name| match var_name {
+            "TEST_PG_HOST" => Ok("localhost".to_string()),
+            other => Err(format!("unexpected variable lookup: {other}")),
+        })?;
+
+        assert_eq!(resolved.get("host").map(String::as_str), Some("localhost"));
+        Ok(())
     }
-    Ok(())
+
+    #[test]
+    fn resolve_env_vars_with_rejects_missing_variables() {
+        let properties = BTreeMap::from([("password".to_string(), "$MISSING_SECRET".to_string())]);
+
+        let err = resolve_env_vars_with(properties, |_| Err("not set".to_string()))
+            .expect_err("missing env var should fail");
+
+        assert!(err.to_string().contains("MISSING_SECRET"));
+    }
+
+    #[test]
+    fn resolve_env_vars_with_allows_escaped_dollar_prefix() -> Result<()> {
+        let properties = BTreeMap::from([("password".to_string(), "$$literal".to_string())]);
+
+        let resolved = resolve_env_vars_with(properties, |_| {
+            Err("escaped values should not trigger environment lookup".to_string())
+        })?;
+
+        assert_eq!(
+            resolved.get("password").map(String::as_str),
+            Some("$literal")
+        );
+        Ok(())
+    }
 }

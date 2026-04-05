@@ -40,39 +40,38 @@ impl ConfiguredSink {
             } => destination_uri,
         }
     }
+}
 
-    pub async fn prepare_commit(&self, req: CommitRequest) -> Result<PreparedCommit> {
+impl Sink for ConfiguredSink {
+    async fn prepare_commit(&self, req: CommitRequest) -> Result<PreparedCommit> {
         match self {
             Self::Filesystem { sink, .. } => sink.prepare_commit(req).await,
             Self::Polaris { sink, .. } => sink.prepare_commit(req).await,
         }
     }
 
-    pub async fn commit(&self, prepared: PreparedCommit) -> Result<CommitOutcome> {
+    async fn commit(&self, prepared: PreparedCommit) -> Result<CommitOutcome> {
         match self {
             Self::Filesystem { sink, .. } => sink.commit(prepared).await,
             Self::Polaris { sink, .. } => sink.commit(prepared).await,
         }
     }
 
-    pub async fn lookup_commit(&self, key: &IdempotencyKey) -> Result<LookupResult> {
+    async fn lookup_commit(&self, key: &IdempotencyKey) -> Result<LookupResult> {
         match self {
             Self::Filesystem { sink, .. } => sink.lookup_commit(key).await,
             Self::Polaris { sink, .. } => sink.lookup_commit(key).await,
         }
     }
 
-    pub async fn lookup_snapshot(&self, snapshot: &SnapshotRef) -> Result<Option<SnapshotMeta>> {
+    async fn lookup_snapshot(&self, snapshot: &SnapshotRef) -> Result<Option<SnapshotMeta>> {
         match self {
             Self::Filesystem { sink, .. } => sink.lookup_snapshot(snapshot).await,
             Self::Polaris { sink, .. } => sink.lookup_snapshot(snapshot).await,
         }
     }
 
-    pub async fn resolve_uncertain_commit(
-        &self,
-        attempt: &CommitLocator,
-    ) -> Result<ResolvedOutcome> {
+    async fn resolve_uncertain_commit(&self, attempt: &CommitLocator) -> Result<ResolvedOutcome> {
         match self {
             Self::Filesystem { sink, .. } => sink.resolve_uncertain_commit(attempt).await,
             Self::Polaris { sink, .. } => sink.resolve_uncertain_commit(attempt).await,
@@ -86,9 +85,12 @@ pub fn build_source_from_config(
 ) -> Result<Box<dyn SourceAdapter>> {
     match config.kind.as_str() {
         "file" => {
-            let fixture_root = required_property(&config.properties, "fixture_root")?;
-            let fixture_root = resolve_config_path(config_base, fixture_root);
-            Ok(Box::new(RoutedFileSource::new(fixture_root)))
+            let fixture_root_label = required_property(&config.properties, "fixture_root")?;
+            let fixture_root = resolve_config_path(config_base, fixture_root_label);
+            Ok(Box::new(RoutedFileSource::new(
+                fixture_root,
+                fixture_root_label.to_string(),
+            )))
         }
         other => Err(Error::msg(format!("unsupported source kind: {other}"))),
     }
@@ -194,8 +196,8 @@ struct RoutedFileSource {
 }
 
 impl RoutedFileSource {
-    fn new(fixture_root: PathBuf) -> Self {
-        let source_label = fixture_root.to_string_lossy().replace('\\', "/");
+    fn new(fixture_root: PathBuf, source_label: String) -> Self {
+        let source_label = source_label.replace('\\', "/");
         Self {
             fixture_root,
             source_id: format!("file.config.{source_label}"),
@@ -314,19 +316,6 @@ fn resolve_config_path(base: &Path, value: &str) -> PathBuf {
     if path.is_absolute() {
         path
     } else {
-        let base_relative = base.join(&path);
-        if base_relative.exists() {
-            return base_relative;
-        }
-
-        let workspace_relative = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join(&path);
-        if workspace_relative.exists() {
-            return workspace_relative;
-        }
-
         base.join(path)
     }
 }

@@ -2,4 +2,4 @@ version = 1
 kind = "file"
 
 [properties]
-fixture_root = "fixtures/reference_workload_v0"
+fixture_root = "../../reference_workload_v0"
