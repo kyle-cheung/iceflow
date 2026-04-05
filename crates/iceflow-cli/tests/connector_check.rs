@@ -244,6 +244,56 @@ table_mode = "append_only"
     Ok(())
 }
 
+#[test]
+fn connector_check_reports_invalid_resolved_catalog_file_without_aborting() -> Result<()> {
+    let config_root = TempConfigRoot::new("connector-check-invalid-resolved-catalog")?;
+    config_root.write(
+        "sources/local_file.toml",
+        &format!(
+            "version = 1\nkind = \"file\"\n\n[properties]\nfixture_root = \"{}\"\n",
+            orders_events_fixture_root().display()
+        ),
+    )?;
+    config_root.write(
+        "destinations/local_polaris.toml",
+        "version = 1\nkind = \"polaris\"\ncatalog = \"catalog_a\"\n\n[properties]\nwarehouse_uri = \"file:///tmp/iceflow-output\"\n",
+    )?;
+    config_root.write(
+        "catalogs/catalog_a.toml",
+        "version = 1\nkind = \"polaris\"\nendpoint = [\n",
+    )?;
+    config_root.write(
+        "connectors/orders_append_polaris.toml",
+        r#"version = 1
+source = "local_file"
+destination = "local_polaris"
+
+[[tables]]
+source_schema = ""
+source_table = "orders_events"
+destination_namespace = "orders_events"
+destination_table = "orders_events"
+table_mode = "append_only"
+"#,
+    )?;
+
+    let report = iceflow_cli::commands::connector_cmd::check_blocking(
+        iceflow_cli::commands::connector_cmd::CheckArgs {
+            connector_config: config_root
+                .path()
+                .join("connectors/orders_append_polaris.toml"),
+            config_root: config_root.path().to_path_buf(),
+        },
+    )?;
+
+    assert!(!report.valid);
+    assert!(report
+        .errors
+        .iter()
+        .any(|error| error.contains("catalog 'catalog_a': failed to parse catalog config")));
+    Ok(())
+}
+
 fn fixtures() -> std::path::PathBuf {
     std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),

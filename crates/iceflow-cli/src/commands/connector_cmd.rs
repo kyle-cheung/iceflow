@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{
     build_source_from_config, load_catalog_config, load_connector_config, load_destination_config,
-    load_optional_catalog_config, load_source_config, resolve_catalog_name, CaptureSettings,
-    ConnectorConfig, DestinationConfig,
+    load_source_config, resolve_catalog_name, CaptureSettings, ConnectorConfig, DestinationConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,8 +210,7 @@ fn validate_catalog_configuration(
 ) -> Result<CatalogValidation> {
     match resolve_catalog_name(connector, destination) {
         Ok(Some(name)) => {
-            load_optional_catalog_config(config_root, connector, destination)
-                .map_err(|err| Error::msg(format!("catalog resolution: {err}")))?;
+            validate_catalog_file(config_root, &name, errors);
             Ok(CatalogValidation::Resolved(name))
         }
         Ok(None) => Ok(CatalogValidation::Unresolved),
