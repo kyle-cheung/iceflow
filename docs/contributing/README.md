@@ -19,7 +19,7 @@ Start in `AGENTS.md` when you need to orient yourself quickly. Use the files in 
 - `crates/iceflow-state`: SQLite-backed control plane, migrations, persisted batch/attempt/checkpoint state, and recovery/orphan bookkeeping.
 - `crates/iceflow-sink`: sink protocol plus append-only filesystem/Polaris implementations and test-double coverage.
 - `crates/iceflow-runtime`: local intake/backpressure and checkpoint gating.
-- `crates/iceflow-cli`: operator-facing command wiring for `run` and append-only `compact`.
+- `crates/iceflow-cli`: operator-facing command wiring for `source check`, `connector check`, `connector run`, the legacy `run`, and append-only `compact`.
 
 ## Crate Guides
 
@@ -34,8 +34,9 @@ Start in `AGENTS.md` when you need to orient yourself quickly. Use the files in 
 ## Non-Crate Surfaces
 
 - `fixtures/reference_workload_v0/`: checked-in reference workloads; when workload names or routing change, update `iceflow-source`, `iceflow-cli`, `iceflow-types`, and `benchmarks/pyiceberg_baseline/` alongside the fixtures.
+- `fixtures/config_samples/`: sample config roots for the config-driven CLI; when the source/destination/catalog/connector layout or command contract changes, update these samples and the CLI docs together.
 - `infra/local/`: local Polaris/object-store bootstrap, env templates, and stack scripts; pair this with `just stack-up`, `just stack-down`, and `just test-real-stack`.
-- `README.md`: product architecture, current CLI contract, and operator-facing examples.
+- `README.md`: product architecture, current CLI contract, sample config layout, and operator-facing examples.
 
 ## Shared Expectations
 

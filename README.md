@@ -25,18 +25,18 @@ source adapter → Arrow batch → normalize/write worker → Parquet batch + ma
 | Crate | What it owns | Where it sits in the flow |
 |---|---|---|
 | `iceflow-types` | Shared domain model: table IDs, logical mutations, manifests, schema policy, reference workload descriptors | Used everywhere; this is the vocabulary the rest of the system agrees on |
-| `iceflow-source` | Source adapter trait plus the deterministic file-based reference source | Produces `SourceBatch` values from the fixture/reference workload |
+| `iceflow-source` | Session-based source adapter trait plus the deterministic file-based reference source | Produces `SourceBatch` values from fixture/reference workloads |
 | `iceflow-worker-duckdb` | Normalize records, enforce ordering rules, and materialize landed Parquet + batch manifest | Turns a source batch into the durable replay boundary |
 | `iceflow-state` | SQLite-backed control plane for batch registration, file tracking, commit attempts, checkpoint linkage, recovery, and quarantine | Records the authoritative lifecycle of a batch before and after sink commits |
 | `iceflow-sink` | Sink contract, idempotent commit protocol, commit lookup/recovery APIs, filesystem sink, Polaris sink, and test doubles | Owns the destination-facing write and commit semantics |
 | `iceflow-runtime` | In-memory coordinator for table admission, backpressure, durable-pending tracking, and checkpoint gating | Guards when a table may ingest or checkpoint another batch |
-| `iceflow-cli` | Thin executable that wires source + worker + state + sink + runtime into runnable commands | Current operator entrypoint for `run` and `compact` |
+| `iceflow-cli` | Thin executable that wires source + worker + state + sink + runtime into runnable commands | Current operator entrypoint for `source check`, `connector check`, `connector run`, the legacy `run`, and `compact` |
 
 ### How the Crates Fit Together
 
 The pipeline is intentionally split so each crate owns one boundary:
 
-1. `iceflow-source` reads the next snapshot for a source table and returns a `SourceBatch`.
+1. `iceflow-source` opens a capture session for a source table and polls the next `SourceBatch`.
 2. `iceflow-worker-duckdb` normalizes that batch into engine-shaped rows and writes landed Parquet plus a deterministic manifest.
 3. `iceflow-state` registers the manifest, records the written files, opens a commit attempt, and later records the resolved outcome plus checkpoint linkage.
 4. `iceflow-sink` prepares and commits the batch into the destination, with lookup and recovery hooks for uncertain outcomes.
@@ -59,6 +59,7 @@ Said another way:
 |---|---|
 | `crates/` | Rust implementation split by domain: types, state, source, worker, sink, runtime, and CLI |
 | `fixtures/reference_workload_v0/` | Canonical JSONL reference workloads used by the file source and benchmark fixture generation |
+| `fixtures/config_samples/` | Sample config roots split into `sources/`, `destinations/`, `catalogs/`, and `connectors/` for the config-driven CLI |
 | `infra/local/` | Local Polaris plus S3-compatible stack, `.env` template, and bootstrap scripts |
 | `benchmarks/` | Benchmark harnesses and benchmark-specific documentation |
 | `docs/` | Session briefs plus deferred follow-up notes that are intentionally kept out of the root README |
@@ -110,6 +111,10 @@ cargo build
 # Fast unit tests (Tier 0)
 just test-fast
 
+# Equivalent fast-suite commands if `just` is unavailable
+cargo test -p iceflow-types
+cargo test -p iceflow-source --test source_adapter
+
 # Local Polaris bootstrap + S3-compatible object-store probe
 just test-local-object-store
 
@@ -136,16 +141,72 @@ After building, the binary is `iceflow-cli` in `target/debug/` or `target/releas
 ./target/debug/iceflow-cli run ...
 ```
 
-The CLI currently exposes two subcommands:
+The CLI currently exposes five subcommands:
 
-- `run`: execute a reference workload end to end through source → worker → state → sink
+- `source check`: validate a source config and report advertised capabilities
+- `connector check`: validate a connector config root before running it
+- `connector run`: execute a config-driven connector end to end through source → worker → state → sink
+- `run`: execute a checked-in reference workload directly without the config layer
 - `compact`: run offline append-only file compaction against an existing table layout
 
 Unlike a typical Clap-based CLI, `iceflow-cli --help` is not implemented yet. Treat the README examples below as the current command contract.
 
+#### Config model
+
+The config-driven commands expect a config root with four surfaces:
+
+```text
+<config-root>/
+  sources/
+  destinations/
+  catalogs/
+  connectors/
+```
+
+- `sources/*.toml`: source adapter configs such as the routed local file source
+- `destinations/*.toml`: sink configs such as filesystem and Polaris
+- `catalogs/*.toml`: optional catalog configs referenced by destinations or connectors
+- `connectors/*.toml`: table mappings plus capture settings that bind a source to a destination
+
+Sample files live in `fixtures/config_samples/`:
+
+- `fixtures/config_samples/sources/local_file.toml`
+- `fixtures/config_samples/destinations/local_fs.toml`
+- `fixtures/config_samples/destinations/local_polaris.toml`
+- `fixtures/config_samples/catalogs/local_polaris.toml`
+- `fixtures/config_samples/connectors/orders_append.toml`
+- `fixtures/config_samples/connectors/orders_append_polaris.toml`
+
+#### `source check`
+
+Use `source check` to validate a source config in isolation and inspect the source capabilities that a connector can rely on.
+
+```sh
+cargo run -p iceflow-cli -- source check \
+  --source fixtures/config_samples/sources/local_file.toml
+```
+
+#### `connector check`
+
+Use `connector check` to validate a config root before execution. This verifies the referenced source, destination, optional catalog, and table-mode compatibility.
+
+```sh
+cargo run -p iceflow-cli -- connector check \
+  --connector fixtures/config_samples/connectors/orders_append.toml
+```
+
+#### `connector run`
+
+Use `connector run` for the config-driven replication path. It derives the config root from the connector path and resumes each table from the last durable checkpoint stored in `iceflow-state`.
+
+```sh
+cargo run -p iceflow-cli -- connector run \
+  --connector fixtures/config_samples/connectors/orders_append.toml
+```
+
 #### `run`
 
-Use `run` to execute one of the checked-in reference workloads.
+Use `run` to execute one of the checked-in reference workloads directly. This path is preserved for deterministic regression coverage and benchmark fixture playback.
 
 Required:
 

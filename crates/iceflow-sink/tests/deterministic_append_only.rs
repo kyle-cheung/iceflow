@@ -5,7 +5,9 @@ use iceflow_sink::{
     CommitLocator, CommitRequest, FilesystemSink, ResolvedOutcome, Sink, SinkFailpoint,
     TestDoubleSink,
 };
-use iceflow_source::{FileSource, SnapshotRequest, SourceAdapter};
+use iceflow_source::{
+    BatchPoll, BatchRequest, FileSource, OpenCaptureRequest, SourceAdapter, SourceTableSelection,
+};
 use iceflow_state::{
     checkpoint_ack, checkpoint_ref, AttemptResolution, BatchStatus,
     CommitRequest as StateCommitRequest, SnapshotRef, StateStore, TestStateStore,
@@ -102,10 +104,22 @@ fn filesystem_sink_persists_append_commit_across_reloads() -> Result<()> {
 fn append_only_worker_output_commits_through_filesystem_sink() -> Result<()> {
     block_on(async {
         let source = FileSource::from_fixture_dir("fixtures/reference_workload_v0/orders_events");
-        let batch = source
-            .snapshot(SnapshotRequest { batch_index: 1 })
-            .await?
-            .expect("orders_events batch fixture");
+        let mut session = source
+            .open_capture(OpenCaptureRequest {
+                table: SourceTableSelection {
+                    table_id: TableId::from("orders_events"),
+                    source_schema: String::new(),
+                    source_table: "orders_events".to_string(),
+                    table_mode: TableMode::AppendOnly,
+                },
+                resume_from: None,
+            })
+            .await?;
+        let batch = match session.poll_batch(BatchRequest::default()).await? {
+            BatchPoll::Batch(batch) => batch,
+            other => panic!("expected batch fixture, got {other:?}"),
+        };
+        session.close().await?;
         let worker = DuckDbWorker::in_memory()?;
         let materialized = worker.materialize(batch).await?;
         let root = warehouse_root("worker-append-only");
