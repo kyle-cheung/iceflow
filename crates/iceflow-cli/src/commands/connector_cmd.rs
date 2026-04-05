@@ -1,11 +1,13 @@
 use anyhow::{Error, Result};
 use iceflow_source::SourceCapability;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    build_source_from_config, load_connector_config, load_destination_config,
+    build_source_from_config, load_catalog_config, load_connector_config, load_destination_config,
     load_optional_catalog_config, load_source_config, resolve_catalog_name, CaptureSettings,
+    ConnectorConfig, DestinationConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,12 +32,7 @@ impl CheckArgs {
             .and_then(|index| args.get(index + 1))
             .map(PathBuf::from)
             .ok_or_else(|| Error::msg("--connector <path> is required"))?;
-
-        let config_root = connector_config
-            .parent()
-            .and_then(|path| path.parent())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let config_root = infer_config_root(&connector_config)?;
 
         Ok(Self {
             connector_config,
@@ -81,29 +78,23 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
-    let catalog_name = match resolve_catalog_name(&connector, &destination_config) {
-        Ok(name) => name,
-        Err(err) => {
-            errors.push(err.to_string());
-            None
-        }
-    };
+    let catalog_state = validate_catalog_configuration(
+        &args.config_root,
+        &connector,
+        &destination_config,
+        &mut errors,
+    )?;
 
-    match (destination_config.kind.as_str(), catalog_name.as_ref()) {
-        ("filesystem", Some(name)) => errors.push(format!(
+    match (&destination_config.kind[..], &catalog_state) {
+        ("filesystem", CatalogValidation::Resolved(name)) => errors.push(format!(
             "destination '{}' does not support catalog '{}'",
             connector.destination, name
         )),
-        ("polaris", None) => errors.push(format!(
+        ("polaris", CatalogValidation::Unresolved) => errors.push(format!(
             "destination '{}' requires a catalog reference",
             connector.destination
         )),
         _ => {}
-    }
-
-    if catalog_name.is_some() {
-        load_optional_catalog_config(&args.config_root, &connector, &destination_config)
-            .map_err(|err| Error::msg(format!("catalog resolution: {err}")))?;
     }
 
     if connector.tables.is_empty() {
@@ -155,15 +146,21 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
             ));
         }
         if table.table_mode == "keyed_upsert"
-            && (!source_report
+            && !source_report
                 .capabilities
                 .contains(&SourceCapability::KeyedUpsert)
-                || !source_report
-                    .capabilities
-                    .contains(&SourceCapability::StableLatestWinsOrdering))
         {
             errors.push(format!(
-                "tables[{index}]: keyed_upsert requires KeyedUpsert and StableLatestWinsOrdering capabilities"
+                "tables[{index}]: source does not advertise keyed_upsert capability"
+            ));
+        }
+        if table.table_mode == "keyed_upsert"
+            && !source_report
+                .capabilities
+                .contains(&SourceCapability::StableLatestWinsOrdering)
+        {
+            errors.push(format!(
+                "tables[{index}]: source does not advertise stable_latest_wins_ordering capability"
             ));
         }
     }
@@ -174,4 +171,119 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
         warnings,
         table_count: connector.tables.len(),
     })
+}
+
+fn infer_config_root(connector_config: &Path) -> Result<PathBuf> {
+    let Some(connectors_dir) = connector_config.parent() else {
+        return Err(Error::msg(
+            "--connector must be nested under <config-root>/connectors/",
+        ));
+    };
+    let Some(config_root) = connectors_dir.parent() else {
+        return Err(Error::msg(
+            "--connector must be nested under <config-root>/connectors/",
+        ));
+    };
+
+    if connectors_dir.as_os_str().is_empty()
+        || config_root.as_os_str().is_empty()
+        || connectors_dir.file_name().and_then(|name| name.to_str()) != Some("connectors")
+    {
+        return Err(Error::msg(
+            "--connector must be nested under <config-root>/connectors/",
+        ));
+    }
+
+    Ok(config_root.to_path_buf())
+}
+
+enum CatalogValidation {
+    Resolved(String),
+    Unresolved,
+    Conflict,
+}
+
+fn validate_catalog_configuration(
+    config_root: &Path,
+    connector: &ConnectorConfig,
+    destination: &DestinationConfig,
+    errors: &mut Vec<String>,
+) -> Result<CatalogValidation> {
+    match resolve_catalog_name(connector, destination) {
+        Ok(Some(name)) => {
+            load_optional_catalog_config(config_root, connector, destination)
+                .map_err(|err| Error::msg(format!("catalog resolution: {err}")))?;
+            Ok(CatalogValidation::Resolved(name))
+        }
+        Ok(None) => Ok(CatalogValidation::Unresolved),
+        Err(err) => {
+            errors.push(err.to_string());
+            for catalog_name in referenced_catalog_names(connector, destination) {
+                validate_catalog_file(config_root, &catalog_name, errors);
+            }
+            Ok(CatalogValidation::Conflict)
+        }
+    }
+}
+
+fn referenced_catalog_names(
+    connector: &ConnectorConfig,
+    destination: &DestinationConfig,
+) -> BTreeSet<String> {
+    connector
+        .catalog
+        .iter()
+        .chain(destination.catalog.iter())
+        .cloned()
+        .collect()
+}
+
+fn validate_catalog_file(config_root: &Path, catalog_name: &str, errors: &mut Vec<String>) {
+    let catalog_path = config_root
+        .join("catalogs")
+        .join(format!("{catalog_name}.toml"));
+    if let Err(err) = load_catalog_config(&catalog_path) {
+        errors.push(format!("catalog '{catalog_name}': {err}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_args_parse_derives_config_root_from_nested_connector_path() -> Result<()> {
+        let parsed = CheckArgs::parse(&[
+            "--connector".to_string(),
+            "fixtures/config_samples/connectors/orders_append.toml".to_string(),
+        ])?;
+
+        assert_eq!(parsed.config_root, PathBuf::from("fixtures/config_samples"));
+        Ok(())
+    }
+
+    #[test]
+    fn check_args_parse_rejects_bare_connector_filename() {
+        let err = CheckArgs::parse(&["--connector".to_string(), "orders_append.toml".to_string()])
+            .expect_err("bare connector path should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "--connector must be nested under <config-root>/connectors/"
+        );
+    }
+
+    #[test]
+    fn check_args_parse_rejects_single_component_connector_path() {
+        let err = CheckArgs::parse(&[
+            "--connector".to_string(),
+            "connectors/orders_append.toml".to_string(),
+        ])
+        .expect_err("single-component connector path should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "--connector must be nested under <config-root>/connectors/"
+        );
+    }
 }

@@ -10,11 +10,11 @@ use iceflow_sink::{
 };
 use iceflow_source::{
     validate_source_spec, BatchPoll, BatchRequest, CheckpointAck, FileSource, OpenCaptureRequest,
-    SourceAdapter, SourceCapability, SourceCaptureSession, SourceCheckReport, SourceSpec,
+    SourceAdapter, SourceCaptureSession, SourceCheckReport, SourceSpec,
 };
 use iceflow_state::SnapshotRef;
 use iceflow_types::{SourceClass, TableId};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -224,23 +224,14 @@ impl SourceAdapter for RoutedFileSource {
             )));
         }
 
-        let mut capabilities = BTreeSet::new();
-        capabilities.insert(SourceCapability::InitialSnapshot);
-        capabilities.insert(SourceCapability::Resume);
-        capabilities.insert(SourceCapability::DeterministicCheckpoints);
-        capabilities.insert(SourceCapability::AppendOnly);
-
-        let mut details = BTreeMap::new();
-        details.insert(
+        let mut report = FileSource::from_fixture_dir(self.fixture_root.clone())
+            .check()
+            .await?;
+        report.details.insert(
             "fixture_root".to_string(),
             self.fixture_root.display().to_string(),
         );
-
-        Ok(SourceCheckReport {
-            capabilities,
-            warnings: Vec::new(),
-            details,
-        })
+        Ok(report)
     }
 
     async fn open_capture(
