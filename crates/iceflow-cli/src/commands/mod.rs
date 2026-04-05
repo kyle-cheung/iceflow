@@ -6,6 +6,7 @@ mod compact_history;
 
 pub mod compact;
 pub mod run;
+pub mod source_cmd;
 
 pub(super) fn file_uri_path(uri: &str) -> Result<PathBuf> {
     uri.strip_prefix("file://")

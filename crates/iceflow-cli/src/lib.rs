@@ -16,6 +16,7 @@ impl Cli {
         CommandSpec::new("iceflow")
             .with_subcommand(CommandSpec::new("run"))
             .with_subcommand(CommandSpec::new("compact"))
+            .with_subcommand(CommandSpec::new("source").with_subcommand(CommandSpec::new("check")))
     }
 
     pub fn parse_from<I, S>(args: I) -> Result<Commands>
@@ -29,11 +30,14 @@ impl Cli {
             return Err(Error::msg("expected a subcommand"));
         };
 
+        let remaining: Vec<String> = args.collect();
+
         match subcommand.as_str() {
-            "run" => Ok(Commands::Run(commands::run::Args::parse(args.collect())?)),
+            "run" => Ok(Commands::Run(commands::run::Args::parse(remaining)?)),
             "compact" => Ok(Commands::Compact(commands::compact::Args::parse(
-                args.collect(),
+                remaining,
             )?)),
+            "source" => parse_source_subcommand(remaining),
             other => Err(Error::msg(format!("unknown subcommand: {other}"))),
         }
     }
@@ -43,6 +47,7 @@ impl Cli {
 pub enum Commands {
     Run(commands::run::Args),
     Compact(commands::compact::Args),
+    SourceCheck(commands::source_cmd::Args),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +105,24 @@ pub fn run_env() -> Result<()> {
             println!("{}", report.to_json());
             Ok(())
         }
+        Commands::SourceCheck(args) => {
+            let report = commands::source_cmd::execute_blocking(args)?;
+            println!("{report:?}");
+            Ok(())
+        }
+    }
+}
+
+fn parse_source_subcommand(args: Vec<String>) -> Result<Commands> {
+    let Some(subcommand) = args.first() else {
+        return Err(Error::msg("expected a source subcommand"));
+    };
+
+    match subcommand.as_str() {
+        "check" => Ok(Commands::SourceCheck(commands::source_cmd::Args::parse(
+            &args[1..],
+        )?)),
+        other => Err(Error::msg(format!("unknown source subcommand: {other}"))),
     }
 }
 
@@ -159,6 +182,26 @@ mod tests {
         assert!(cmd
             .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "compact"));
+        assert!(cmd
+            .get_subcommands()
+            .any(|subcommand| subcommand.get_name() == "source"));
+    }
+
+    #[test]
+    fn cli_parses_source_check_subcommand() {
+        let parsed = crate::Cli::parse_from([
+            "iceflow",
+            "source",
+            "check",
+            "--source",
+            "fixtures/config_samples/sources/local_file.toml",
+        ])
+        .expect("parsed command");
+
+        assert!(matches!(
+            parsed,
+            crate::Commands::SourceCheck(crate::commands::source_cmd::Args { .. })
+        ));
     }
 
     #[test]
