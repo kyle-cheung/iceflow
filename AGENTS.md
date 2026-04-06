@@ -1,6 +1,15 @@
 ## Principles
 If you do not know something or you think that a direction we're taking is wrong. It is okay to say no or I don't know. Gather more information. We want to build and ship a quality product, if we're ever uncertain of something, speak up.
 
+## RTK
+
+Use RTK for shell commands in this repo.
+
+- Always prefix commands with `rtk`.
+- In chained commands, prefix each command segment with `rtk`.
+- Use `rtk proxy <cmd>` only when you need to bypass filtering for debugging.
+- `rtk gain`, `rtk gain --history`, and `rtk discover` are the main RTK meta commands.
+
 ## Quick Reference
 
 - `cargo build`
