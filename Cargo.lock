@@ -23,7 +23,7 @@ dependencies = [
  "libloading",
  "toml 0.9.12+spec-1.1.0",
  "windows-registry",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -83,6 +83,12 @@ dependencies = [
 [[package]]
 name = "anyhow"
 version = "0.1.0"
+
+[[package]]
+name = "anyhow"
+version = "1.0.102"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "arbitrary"
@@ -632,7 +638,7 @@ dependencies = [
 name = "iceflow-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "anyhow 0.1.0",
  "async-trait",
  "iceflow-runtime",
  "iceflow-sink",
@@ -659,7 +665,7 @@ dependencies = [
 name = "iceflow-sink"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "anyhow 0.1.0",
  "chrono 0.1.0",
  "iceflow-source",
  "iceflow-state",
@@ -675,7 +681,7 @@ dependencies = [
 name = "iceflow-source"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "anyhow 0.1.0",
  "async-trait",
  "chrono 0.1.0",
  "iceflow-types",
@@ -688,14 +694,13 @@ version = "0.1.0"
 dependencies = [
  "adbc_core",
  "adbc_snowflake",
- "anyhow",
+ "anyhow 1.0.102",
  "arrow-array",
  "arrow-cast",
  "async-trait",
  "dotenvy",
  "iceflow-source",
  "iceflow-types",
- "serde_json 0.1.0",
  "tokio",
 ]
 
@@ -703,16 +708,17 @@ dependencies = [
 name = "iceflow-state"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "anyhow 0.1.0",
  "chrono 0.1.0",
  "iceflow-types",
+ "tokio",
 ]
 
 [[package]]
 name = "iceflow-types"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "anyhow 0.1.0",
  "chrono 0.1.0",
  "serde_json 0.1.0",
 ]
@@ -721,7 +727,7 @@ dependencies = [
 name = "iceflow-worker-duckdb"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "anyhow 0.1.0",
  "chrono 0.1.0",
  "iceflow-source",
  "iceflow-types",

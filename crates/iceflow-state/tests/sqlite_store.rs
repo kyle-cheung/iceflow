@@ -6,9 +6,7 @@ use iceflow_types::{
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
-use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 #[test]
 fn persistent_store_reopens_existing_durable_checkpoint() -> Result<()> {
@@ -129,27 +127,8 @@ fn block_on<F>(future: F) -> F::Output
 where
     F: Future,
 {
-    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
-    let mut future = pin!(future);
-    let mut cx = Context::from_waker(&waker);
-
-    loop {
-        match future.as_mut().poll(&mut cx) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::thread::yield_now(),
-        }
-    }
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("tokio runtime should build")
+        .block_on(future)
 }
-
-unsafe fn dummy_raw_waker() -> RawWaker {
-    RawWaker::new(std::ptr::null(), &DUMMY_WAKER_VTABLE)
-}
-
-unsafe fn clone_dummy(_: *const ()) -> RawWaker {
-    dummy_raw_waker()
-}
-
-unsafe fn wake_dummy(_: *const ()) {}
-
-static DUMMY_WAKER_VTABLE: RawWakerVTable =
-    RawWakerVTable::new(clone_dummy, wake_dummy, wake_dummy, wake_dummy);

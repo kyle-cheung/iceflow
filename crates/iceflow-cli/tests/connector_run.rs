@@ -52,7 +52,9 @@ fn connector_run_blocking_persists_state_under_config_root() -> Result<()> {
         config_root.write_orders_append_connector(destination_root.path())?;
 
         let connector_config = config_root.path().join("connectors/orders_append.toml");
-        let state_path = config_root.path().join(".iceflow/state/orders_append.sqlite3");
+        let state_path = config_root
+            .path()
+            .join(".iceflow/state/orders_append.sqlite3");
 
         assert!(!state_path.exists());
 

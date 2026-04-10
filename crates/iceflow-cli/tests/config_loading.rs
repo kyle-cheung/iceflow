@@ -339,7 +339,8 @@ fn build_bound_source_from_config_routes_file_tables_through_fixture_root() -> R
         .block_on(async {
             let source_path = source_config_path();
             let source_config = load_source_config(&source_path)?;
-            let connector = load_connector_config(&fixtures().join("connectors/orders_append.toml"))?;
+            let connector =
+                load_connector_config(&fixtures().join("connectors/orders_append.toml"))?;
             let table_entry = &connector.tables[0];
             let table_id = connector_table_id(table_entry);
             let source = build_bound_source_from_config(
@@ -374,6 +375,39 @@ fn build_bound_source_from_config_routes_file_tables_through_fixture_root() -> R
             session.close().await?;
             Ok(())
         })
+}
+
+#[test]
+fn build_bound_source_from_config_reports_snowflake_scaffold_status() {
+    let source_config = SourceConfig {
+        version: 1,
+        kind: "snowflake".to_string(),
+        properties: BTreeMap::new(),
+    };
+    let connector = ConnectorConfig {
+        version: 1,
+        source: "local_snowflake".to_string(),
+        destination: "local_fs".to_string(),
+        catalog: None,
+        capture: Default::default(),
+        tables: Vec::new(),
+    };
+
+    let result = build_bound_source_from_config(
+        &source_config,
+        Path::new("/tmp/config/sources"),
+        &BoundSourceContext {
+            connector_name: "snowflake_customer_state_append".to_string(),
+            connector,
+            durable_checkpoint: None,
+        },
+    );
+    let err = match result {
+        Ok(_) => panic!("snowflake source should still be scaffold-only"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("scaffolded but not wired"));
 }
 
 #[test]

@@ -296,12 +296,10 @@ where
         load_optional_catalog_config(&args.config_root, &connector, &destination_config)
             .map_err(|err| Error::msg(format!("catalog resolution: {err}")))?;
     let durable_checkpoint = match connector.tables.first() {
-        Some(table) => {
-            state
-                .last_durable_checkpoint_for_table(&connector_table_id(table))
-                .await?
-                .map(|checkpoint| checkpoint.checkpoint)
-        }
+        Some(table) => state
+            .last_durable_checkpoint_for_table(&connector_table_id(table))
+            .await?
+            .map(|checkpoint| checkpoint.checkpoint),
         None => None,
     };
     let source = build_bound_source_from_config(
@@ -540,10 +538,7 @@ fn connector_name(connector_config: &Path) -> Result<String> {
 }
 
 fn resolve_connector_state_path(connector_config: &Path, config_root: &Path) -> Result<PathBuf> {
-    let connector_stem = connector_config
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| Error::msg("connector file name must have a valid stem"))?;
+    let connector_stem = connector_name(connector_config)?;
 
     Ok(config_root
         .join(".iceflow")

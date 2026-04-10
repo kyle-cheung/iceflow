@@ -4,7 +4,6 @@ use adbc_snowflake::{connection, database, Driver};
 use anyhow::{Error, Result};
 use arrow_array::RecordBatchReader;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,35 +96,6 @@ impl SnowflakeClient for AdbcSnowflakeClient {
     }
 }
 
-pub fn build_connection_uri(config: &SnowflakeSourceConfig) -> String {
-    format!(
-        "{}:{}@{}/{}?warehouse={}&role={}",
-        uri_encode(&config.user),
-        uri_encode(&config.password),
-        uri_encode(&config.account),
-        uri_encode(&config.database),
-        uri_encode(&config.warehouse),
-        uri_encode(&config.role),
-    )
-}
-
-pub fn build_database_options(config: &SnowflakeSourceConfig) -> BTreeMap<String, String> {
-    BTreeMap::from([("uri".to_string(), build_connection_uri(config))])
-}
-
-pub fn uri_encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(char::from(byte));
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
-}
-
 pub fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
@@ -190,36 +160,7 @@ fn execute_query_rows(
     let reader = statement
         .execute()
         .map_err(|err| Error::msg(format!("adbc execute failed: {err}")))?;
-    let columns = reader
-        .schema()
-        .fields()
-        .iter()
-        .map(|field| field.name().clone())
-        .collect::<Vec<_>>();
-
-    let format_options = FormatOptions::default();
-    let mut rows = Vec::new();
-    for batch in reader {
-        let batch = batch.map_err(|err| Error::msg(format!("adbc row read failed: {err}")))?;
-        let formatters = batch
-            .columns()
-            .iter()
-            .map(|column| {
-                ArrayFormatter::try_new(column.as_ref(), &format_options)
-                    .map_err(|err| Error::msg(format!("adbc formatter creation failed: {err}")))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        for row_index in 0..batch.num_rows() {
-            let mut row = Vec::with_capacity(formatters.len());
-            for formatter in &formatters {
-                row.push(format!("{}", formatter.value(row_index)));
-            }
-            rows.push(row);
-        }
-    }
-
-    Ok((columns, rows))
+    drain_reader_to_rows(reader)
 }
 
 fn lookup_last_query_id(connection: &mut connection::Connection) -> Result<String> {
@@ -245,6 +186,19 @@ fn execute_query_rows_without_query_id(
     let reader = statement
         .execute()
         .map_err(|err| Error::msg(format!("adbc execute failed: {err}")))?;
+    drain_reader_to_rows(reader).map(|(_, rows)| rows)
+}
+
+fn drain_reader_to_rows<R>(reader: R) -> Result<(Vec<String>, Vec<Vec<String>>)>
+where
+    R: RecordBatchReader,
+{
+    let columns = reader
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.name().clone())
+        .collect::<Vec<_>>();
     let format_options = FormatOptions::default();
     let mut rows = Vec::new();
 
@@ -268,9 +222,10 @@ fn execute_query_rows_without_query_id(
         }
     }
 
-    Ok(rows)
+    Ok((columns, rows))
 }
-fn is_row_returning_statement(sql: &str) -> bool {
+
+pub fn is_row_returning_statement(sql: &str) -> bool {
     let leading = sql.trim_start();
     let upper = leading
         .split_whitespace()
@@ -286,47 +241,7 @@ mod tests {
     use crate::config::SnowflakeAuthMethod;
 
     #[test]
-    fn builds_snowflake_connection_uri() {
-        let config = SnowflakeSourceConfig {
-            source_label: "local_snowflake".to_string(),
-            account: "xy12345.us-east-1".to_string(),
-            user: "ICEFLOW_DEMO".to_string(),
-            password: "pa@ss&word?".to_string(),
-            warehouse: "ICEFLOW_WH".to_string(),
-            role: "ICEFLOW_ROLE".to_string(),
-            database: "SOURCE_DB".to_string(),
-            auth_method: SnowflakeAuthMethod::Password,
-        };
-
-        let uri = build_connection_uri(&config);
-
-        assert!(uri.starts_with("ICEFLOW_DEMO:pa%40ss%26word%3F@xy12345.us-east-1/SOURCE_DB"));
-        assert!(uri.contains("warehouse=ICEFLOW_WH"));
-        assert!(uri.contains("role=ICEFLOW_ROLE"));
-    }
-
-    #[test]
-    fn builds_adbc_options_and_quotes_identifiers() {
-        let config = SnowflakeSourceConfig {
-            source_label: "local_snowflake".to_string(),
-            account: "xy12345.us-east-1".to_string(),
-            user: "ICEFLOW_DEMO".to_string(),
-            password: "secret".to_string(),
-            warehouse: "ICE&FLOW WH".to_string(),
-            role: "ICEFLOW?ROLE".to_string(),
-            database: "SOURCE_DB".to_string(),
-            auth_method: SnowflakeAuthMethod::Password,
-        };
-
-        let options = build_database_options(&config);
-
-        assert_eq!(
-            options.get("uri").map(String::as_str),
-            Some(
-                "ICEFLOW_DEMO:secret@xy12345.us-east-1/SOURCE_DB?warehouse=ICE%26FLOW%20WH&role=ICEFLOW%3FROLE"
-            )
-        );
-        assert_eq!(uri_encode("name@value&x?"), "name%40value%26x%3F");
+    fn quotes_identifiers() {
         assert_eq!(quote_identifier("A\"B"), "\"A\"\"B\"");
         assert_eq!(
             qualified_table_name("PUBLIC", "CUSTOMER_STATE"),
@@ -355,5 +270,15 @@ mod tests {
         assert_eq!(builder.warehouse.as_deref(), Some("ICEFLOW_WH"));
         assert_eq!(builder.role.as_deref(), Some("ICEFLOW_ROLE"));
         assert!(builder.password.is_none());
+    }
+
+    #[test]
+    fn detects_row_returning_statements() {
+        assert!(is_row_returning_statement("SELECT 1"));
+        assert!(is_row_returning_statement(" show tables"));
+        assert!(is_row_returning_statement(
+            "WITH cte AS (SELECT 1) SELECT * FROM cte"
+        ));
+        assert!(!is_row_returning_statement("INSERT INTO t VALUES (1)"));
     }
 }

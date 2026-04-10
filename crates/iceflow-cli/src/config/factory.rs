@@ -111,7 +111,7 @@ pub fn build_bound_source_from_config(
     match config.kind.as_str() {
         "file" => build_source_from_config(config, config_base),
         "snowflake" => Err(Error::msg(format!(
-            "snowflake source '{}' is not supported yet",
+            "snowflake source '{}' is scaffolded but not wired into connector run/check in this build",
             ctx.connector_name
         ))),
         other => Err(Error::msg(format!("unsupported source kind: {other}"))),

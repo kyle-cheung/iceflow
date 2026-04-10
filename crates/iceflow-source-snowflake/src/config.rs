@@ -1,12 +1,13 @@
 use anyhow::{Error, Result};
 use std::collections::BTreeMap;
+use std::fmt::{self, Debug, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SnowflakeAuthMethod {
     Password,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SnowflakeSourceConfig {
     pub source_label: String,
     pub account: String,
@@ -16,6 +17,21 @@ pub struct SnowflakeSourceConfig {
     pub role: String,
     pub database: String,
     pub auth_method: SnowflakeAuthMethod,
+}
+
+impl Debug for SnowflakeSourceConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SnowflakeSourceConfig")
+            .field("source_label", &self.source_label)
+            .field("account", &self.account)
+            .field("user", &self.user)
+            .field("password", &"<redacted>")
+            .field("warehouse", &self.warehouse)
+            .field("role", &self.role)
+            .field("database", &self.database)
+            .field("auth_method", &self.auth_method)
+            .finish()
+    }
 }
 
 impl SnowflakeSourceConfig {
@@ -70,6 +86,25 @@ mod tests {
 
         assert_eq!(config.account, "xy12345.us-east-1");
         assert_eq!(config.auth_method, SnowflakeAuthMethod::Password);
+    }
+
+    #[test]
+    fn debug_redacts_password() {
+        let config = SnowflakeSourceConfig {
+            source_label: "local_snowflake".to_string(),
+            account: "xy12345.us-east-1".to_string(),
+            user: "ICEFLOW_DEMO".to_string(),
+            password: "super-secret".to_string(),
+            warehouse: "ICEFLOW_WH".to_string(),
+            role: "ICEFLOW_ROLE".to_string(),
+            database: "SOURCE_DB".to_string(),
+            auth_method: SnowflakeAuthMethod::Password,
+        };
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("super-secret"));
     }
 
     #[test]

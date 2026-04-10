@@ -1,6 +1,9 @@
 target/
 .env
 .env.local
+*.key
+*.p8
+*.pem
 *.DS_Store
 **/.pytest_cache/
 **/.venv/

@@ -3,7 +3,9 @@ use adbc_snowflake::{database, Driver};
 use anyhow::{Error, Result};
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use iceflow_source_snowflake::{
-    client::{qualified_table_name, quote_identifier, AdbcSnowflakeClient},
+    client::{
+        is_row_returning_statement, qualified_table_name, quote_identifier, AdbcSnowflakeClient,
+    },
     config::SnowflakeSourceConfig,
 };
 use std::path::{Path, PathBuf};
@@ -337,7 +339,7 @@ fn execute_without_query_id(
         .set_sql_query(sql)
         .map_err(|err| Error::msg(format!("adbc set_sql_query failed: {err}")))?;
 
-    if sql.trim_start().to_ascii_uppercase().starts_with("SELECT") {
+    if is_row_returning_statement(sql) {
         let reader = statement
             .execute()
             .map_err(|err| Error::msg(format!("adbc execute failed: {err}")))?;
@@ -415,8 +417,7 @@ fn load_repo_dotenv() -> Result<()> {
         return Ok(());
     }
 
-    dotenvy::from_path_override(&path)
-        .map_err(|err| Error::msg(format!("failed to load {}: {err}", path.display())))
+    load_dotenv_from(&path)
 }
 
 fn repo_root() -> PathBuf {
@@ -435,6 +436,11 @@ fn optional_env(name: &str) -> Option<String> {
 }
 
 fn apply_live_auth_env_overrides() {
+    let _guard = env_lock().lock().expect("env lock");
+    apply_live_auth_env_overrides_locked();
+}
+
+fn apply_live_auth_env_overrides_locked() {
     if let Ok(private_key_contents) = load_private_key_pkcs8_value() {
         std::env::set_var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE", "auth_jwt");
         std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY");
@@ -485,6 +491,7 @@ fn loads_env_values_from_dotenv_file() -> Result<()> {
 }
 
 fn load_dotenv_from(path: &Path) -> Result<()> {
+    let _guard = env_lock().lock().expect("env lock");
     dotenvy::from_path_override(path)
         .map_err(|err| Error::msg(format!("failed to load {}: {err}", path.display())))
 }
@@ -511,7 +518,7 @@ fn maps_private_key_path_to_pkcs8_value_env_vars() {
     std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE");
     std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_PASSWORD");
 
-    apply_live_auth_env_overrides();
+    apply_live_auth_env_overrides_locked();
 
     assert_eq!(
         std::env::var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE")
