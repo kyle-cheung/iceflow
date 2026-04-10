@@ -13,7 +13,7 @@ use iceflow_source::{
     SourceAdapter, SourceCaptureSession, SourceCheckReport, SourceSpec,
 };
 use iceflow_state::SnapshotRef;
-use iceflow_types::{SourceClass, TableId};
+use iceflow_types::{CheckpointId, SourceClass, TableId};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -92,6 +92,28 @@ pub fn build_source_from_config(
                 fixture_root_label.to_string(),
             )))
         }
+        other => Err(Error::msg(format!("unsupported source kind: {other}"))),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundSourceContext {
+    pub connector_name: String,
+    pub connector: ConnectorConfig,
+    pub durable_checkpoint: Option<CheckpointId>,
+}
+
+pub fn build_bound_source_from_config(
+    config: &SourceConfig,
+    config_base: &Path,
+    ctx: &BoundSourceContext,
+) -> Result<Box<dyn SourceAdapter>> {
+    match config.kind.as_str() {
+        "file" => build_source_from_config(config, config_base),
+        "snowflake" => Err(Error::msg(format!(
+            "snowflake source '{}' is not supported yet",
+            ctx.connector_name
+        ))),
         other => Err(Error::msg(format!("unsupported source kind: {other}"))),
     }
 }

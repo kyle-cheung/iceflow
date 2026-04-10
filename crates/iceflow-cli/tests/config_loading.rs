@@ -1,9 +1,9 @@
 use anyhow::{Error, Result};
 use iceflow_cli::config::{
-    build_sink_from_config, build_source_from_config, connector_table_id, load_catalog_config,
-    load_connector_config, load_destination_config, load_optional_catalog_config,
-    load_source_config, resolve_catalog_name, CatalogConfig, ConfiguredSink, ConnectorConfig,
-    SourceConfig,
+    build_bound_source_from_config, build_sink_from_config, build_source_from_config,
+    connector_table_id, load_catalog_config, load_connector_config, load_destination_config,
+    load_optional_catalog_config, load_source_config, resolve_catalog_name, BoundSourceContext,
+    CatalogConfig, ConfiguredSink, ConnectorConfig, SourceConfig,
 };
 use iceflow_source::{
     BatchPoll, BatchRequest, CheckpointAck, OpenCaptureRequest, SourceTableSelection,
@@ -327,6 +327,51 @@ fn build_source_from_config_routes_file_tables_through_fixture_root() -> Result<
             session.close().await?;
 
             assert_ne!(table_id, TableId::new(table_entry.source_table.clone()));
+            Ok(())
+        })
+}
+
+#[test]
+fn build_bound_source_from_config_routes_file_tables_through_fixture_root() -> Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("tokio runtime")
+        .block_on(async {
+            let source_path = source_config_path();
+            let source_config = load_source_config(&source_path)?;
+            let connector = load_connector_config(&fixtures().join("connectors/orders_append.toml"))?;
+            let table_entry = &connector.tables[0];
+            let table_id = connector_table_id(table_entry);
+            let source = build_bound_source_from_config(
+                &source_config,
+                source_path.parent().unwrap_or_else(|| Path::new(".")),
+                &BoundSourceContext {
+                    connector_name: "orders_append".to_string(),
+                    connector: connector.clone(),
+                    durable_checkpoint: None,
+                },
+            )?;
+
+            let mut session = source
+                .open_capture(OpenCaptureRequest {
+                    table: SourceTableSelection {
+                        table_id: table_id.clone(),
+                        source_schema: table_entry.source_schema.clone(),
+                        source_table: table_entry.source_table.clone(),
+                        table_mode: TableMode::AppendOnly,
+                    },
+                    resume_from: None,
+                })
+                .await?;
+
+            let batch = match session.poll_batch(BatchRequest::default()).await? {
+                BatchPoll::Batch(batch) => batch,
+                other => panic!("expected Batch, got {other:?}"),
+            };
+
+            assert_eq!(batch.batch_label.as_deref(), Some("batch-0001.jsonl"));
+            assert_eq!(batch.records.len(), 2);
+            session.close().await?;
             Ok(())
         })
 }

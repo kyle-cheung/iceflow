@@ -9,6 +9,7 @@ async-trait = "0.1"
 iceflow-runtime = { path = "../iceflow-runtime" }
 iceflow-sink = { path = "../iceflow-sink" }
 iceflow-source = { path = "../iceflow-source" }
+iceflow-source-snowflake = { path = "../iceflow-source-snowflake" }
 iceflow-state = { path = "../iceflow-state" }
 iceflow-types = { path = "../iceflow-types" }
 iceflow-worker-duckdb = { path = "../iceflow-worker-duckdb" }

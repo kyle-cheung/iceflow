@@ -77,14 +77,34 @@ static NEXT_DB_ID: AtomicUsize = AtomicUsize::new(0);
 #[derive(Debug)]
 pub struct SqliteStateStore {
     path: PathBuf,
+    cleanup_on_drop: bool,
 }
 
 pub use SqliteStateStore as TestStateStore;
 
 impl SqliteStateStore {
     pub async fn new() -> Result<Self> {
-        let path = next_db_path();
-        let store = Self { path };
+        Self::open_internal(next_db_path(), true).await
+    }
+
+    pub async fn open_persistent(path: impl Into<PathBuf>) -> Result<Self> {
+        Self::open_internal(path.into(), false).await
+    }
+
+    async fn open_internal(path: PathBuf, cleanup_on_drop: bool) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                Error::msg(format!(
+                    "failed to create sqlite state directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+
+        let store = Self {
+            path,
+            cleanup_on_drop,
+        };
         let conn = Connection::open(&store.path)?;
         conn.exec("PRAGMA journal_mode = WAL;")?;
         conn.exec("PRAGMA synchronous = FULL;")?;
@@ -179,7 +199,9 @@ impl SqliteStateStore {
 
 impl Drop for SqliteStateStore {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if self.cleanup_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 

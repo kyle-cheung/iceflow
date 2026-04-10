@@ -20,9 +20,10 @@ use crate::commands::run::{
     finalize_run_result, first_attempt_key, idle_backoff_sleep, state_files_for_manifest,
 };
 use crate::config::{
-    build_sink_from_config, build_source_from_config, connector_table_id, load_catalog_config,
-    load_connector_config, load_destination_config, load_optional_catalog_config,
-    load_source_config, resolve_catalog_name, CaptureSettings, ConnectorConfig, DestinationConfig,
+    build_bound_source_from_config, build_sink_from_config, connector_table_id,
+    load_catalog_config, load_connector_config, load_destination_config,
+    load_optional_catalog_config, load_source_config, resolve_catalog_name, BoundSourceContext,
+    CaptureSettings, ConnectorConfig, DestinationConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,9 +157,14 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
         .join(format!("{}.toml", connector.destination));
     let destination_config = load_destination_config(&destination_path)
         .map_err(|err| Error::msg(format!("destination '{}': {err}", connector.destination)))?;
-    let source = build_source_from_config(
+    let source = build_bound_source_from_config(
         &source_config,
         source_path.parent().unwrap_or_else(|| Path::new(".")),
+        &BoundSourceContext {
+            connector_name: connector_name(&args.connector_config)?,
+            connector: connector.clone(),
+            durable_checkpoint: None,
+        },
     )
     .map_err(|err| Error::msg(format!("build source '{}': {err}", connector.source)))?;
     let source_report = source
@@ -265,7 +271,7 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
 }
 
 pub async fn run(args: RunArgs) -> Result<RunReport> {
-    let state = SqliteStateStore::new().await?;
+    let state = open_connector_state(&args.connector_config, &args.config_root).await?;
     run_with_state(args, &state).await
 }
 
@@ -289,9 +295,23 @@ where
     let catalog_config =
         load_optional_catalog_config(&args.config_root, &connector, &destination_config)
             .map_err(|err| Error::msg(format!("catalog resolution: {err}")))?;
-    let source = build_source_from_config(
+    let durable_checkpoint = match connector.tables.first() {
+        Some(table) => {
+            state
+                .last_durable_checkpoint_for_table(&connector_table_id(table))
+                .await?
+                .map(|checkpoint| checkpoint.checkpoint)
+        }
+        None => None,
+    };
+    let source = build_bound_source_from_config(
         &source_config,
         source_path.parent().unwrap_or_else(|| Path::new(".")),
+        &BoundSourceContext {
+            connector_name: connector_name(&args.connector_config)?,
+            connector: connector.clone(),
+            durable_checkpoint,
+        },
     )
     .map_err(|err| Error::msg(format!("build source '{}': {err}", connector.source)))?;
     let source_spec = source
@@ -511,6 +531,34 @@ fn infer_config_root(connector_config: &Path) -> Result<PathBuf> {
     Ok(config_root.to_path_buf())
 }
 
+fn connector_name(connector_config: &Path) -> Result<String> {
+    connector_config
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| Error::msg("connector file name must have a valid stem"))
+}
+
+fn resolve_connector_state_path(connector_config: &Path, config_root: &Path) -> Result<PathBuf> {
+    let connector_stem = connector_config
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| Error::msg("connector file name must have a valid stem"))?;
+
+    Ok(config_root
+        .join(".iceflow")
+        .join("state")
+        .join(format!("{connector_stem}.sqlite3")))
+}
+
+async fn open_connector_state(
+    connector_config: &Path,
+    config_root: &Path,
+) -> Result<SqliteStateStore> {
+    let path = resolve_connector_state_path(connector_config, config_root)?;
+    SqliteStateStore::open_persistent(path).await
+}
+
 fn parse_table_mode(value: &str) -> Result<TableMode> {
     match value {
         "append_only" => Ok(TableMode::AppendOnly),
@@ -649,5 +697,19 @@ mod tests {
         .expect_err("unknown connector run argument should fail");
 
         assert_eq!(err.to_string(), "unknown connector run argument: --bogus");
+    }
+
+    #[test]
+    fn resolve_connector_state_path_is_stable_under_config_root() -> Result<()> {
+        let path = resolve_connector_state_path(
+            Path::new("/tmp/config/connectors/snowflake_customer_state_append.toml"),
+            Path::new("/tmp/config"),
+        )?;
+
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/config/.iceflow/state/snowflake_customer_state_append.sqlite3")
+        );
+        Ok(())
     }
 }

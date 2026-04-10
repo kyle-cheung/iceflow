@@ -6,6 +6,7 @@ members = [
     "crates/iceflow-types",
     "crates/iceflow-state",
     "crates/iceflow-source",
+    "crates/iceflow-source-snowflake",
     "crates/iceflow-worker-duckdb",
     "crates/iceflow-sink",
     "crates/iceflow-runtime",

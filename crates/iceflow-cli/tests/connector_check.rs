@@ -19,6 +19,50 @@ fn connector_check_validates_file_source_connector() -> Result<()> {
 }
 
 #[test]
+fn connector_check_does_not_create_persistent_state_directory() -> Result<()> {
+    let config_root = TempConfigRoot::new("connector-check-stateless")?;
+    config_root.write(
+        "sources/local_file.toml",
+        &format!(
+            "version = 1\nkind = \"file\"\n\n[properties]\nfixture_root = \"{}\"\n",
+            orders_events_fixture_root().display()
+        ),
+    )?;
+    config_root.write(
+        "destinations/local_fs.toml",
+        "version = 1\nkind = \"filesystem\"\n\n[properties]\nroot_uri = \"/tmp/iceflow-output\"\n",
+    )?;
+    config_root.write(
+        "connectors/orders_append.toml",
+        r#"version = 1
+source = "local_file"
+destination = "local_fs"
+
+[[tables]]
+source_schema = ""
+source_table = "orders_events"
+destination_namespace = "orders_events"
+destination_table = "orders_events"
+table_mode = "append_only"
+"#,
+    )?;
+
+    let state_dir = config_root.path().join(".iceflow/state");
+    assert!(!state_dir.exists());
+
+    let report = iceflow_cli::commands::connector_cmd::check_blocking(
+        iceflow_cli::commands::connector_cmd::CheckArgs {
+            connector_config: config_root.path().join("connectors/orders_append.toml"),
+            config_root: config_root.path().to_path_buf(),
+        },
+    )?;
+
+    assert!(report.valid);
+    assert!(!state_dir.exists());
+    Ok(())
+}
+
+#[test]
 fn connector_check_resolves_optional_catalog() -> Result<()> {
     let report = iceflow_cli::commands::connector_cmd::check_blocking(
         iceflow_cli::commands::connector_cmd::CheckArgs {
