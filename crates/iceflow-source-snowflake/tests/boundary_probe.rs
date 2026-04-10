@@ -491,6 +491,8 @@ fn loads_env_values_from_dotenv_file() -> Result<()> {
 }
 
 fn load_dotenv_from(path: &Path) -> Result<()> {
+    // This mutates process-global environment variables; keep lock ownership here
+    // so call sites cannot accidentally load .env concurrently.
     let _guard = env_lock().lock().expect("env lock");
     dotenvy::from_path_override(path)
         .map_err(|err| Error::msg(format!("failed to load {}: {err}", path.display())))

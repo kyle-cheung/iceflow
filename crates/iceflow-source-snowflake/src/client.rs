@@ -276,6 +276,7 @@ mod tests {
     fn detects_row_returning_statements() {
         assert!(is_row_returning_statement("SELECT 1"));
         assert!(is_row_returning_statement(" show tables"));
+        assert!(is_row_returning_statement("DESCRIBE TABLE foo"));
         assert!(is_row_returning_statement(
             "WITH cte AS (SELECT 1) SELECT * FROM cte"
         ));
