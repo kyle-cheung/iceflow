@@ -2,6 +2,8 @@ mod binding;
 mod checkpoint;
 pub mod client;
 pub mod config;
+#[cfg(test)]
+mod env_test_support;
 mod metadata;
 mod session;
 mod value;
@@ -270,6 +272,7 @@ fn create_stream_at_statement_sql(binding: &SnowflakeConnectorBinding, query_id:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env_test_support::SavedEnv;
     use iceflow_source::{SourceAdapter, SourceCapability};
     use tokio::runtime::Builder;
 
@@ -413,33 +416,6 @@ mod tests {
         assert!(query.contains("TO_VARCHAR(\"CUSTOMER_ID\") AS \"CUSTOMER_ID\""));
         assert!(query.contains("TO_VARCHAR(\"UPDATED_AT\") AS \"UPDATED_AT\""));
         assert!(query.contains("AT (STATEMENT => '01b12345-0600-1234-0000-000000000000')"));
-    }
-
-    struct SavedEnv {
-        values: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    }
-
-    impl SavedEnv {
-        fn capture(names: &[&'static str]) -> Self {
-            Self {
-                values: names
-                    .iter()
-                    .map(|name| (*name, std::env::var_os(name)))
-                    .collect(),
-            }
-        }
-    }
-
-    impl Drop for SavedEnv {
-        fn drop(&mut self) {
-            for (name, value) in &self.values {
-                if let Some(value) = value {
-                    std::env::set_var(name, value);
-                } else {
-                    std::env::remove_var(name);
-                }
-            }
-        }
     }
 
     fn env_lock() -> &'static std::sync::Mutex<()> {

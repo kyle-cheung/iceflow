@@ -2,6 +2,9 @@ use anyhow::{Error, Result};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+#[path = "../../src/env_test_support.rs"]
+mod env_test_support;
+
 const ADBC_AUTH_ENV_VARS: &[&str] = &[
     "ADBC_SNOWFLAKE_SQL_AUTH_TYPE",
     "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY",
@@ -32,32 +35,44 @@ pub fn optional_env(name: &str) -> Option<String> {
 
 #[must_use]
 pub struct LiveAuthEnvGuard {
-    values: Vec<(&'static str, Option<OsString>)>,
+    values: Option<Vec<(&'static str, Option<OsString>)>>,
 }
 
 impl LiveAuthEnvGuard {
     fn capture(names: &[&'static str]) -> Self {
         Self {
-            values: names
-                .iter()
-                .map(|name| (*name, std::env::var_os(name)))
-                .collect(),
+            values: Some(
+                names
+                    .iter()
+                    .map(|name| (*name, std::env::var_os(name)))
+                    .collect(),
+            ),
+        }
+    }
+
+    fn restore_without_locking(&mut self) {
+        if let Some(values) = self.values.take() {
+            for (name, value) in values {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
         }
     }
 }
 
 impl Drop for LiveAuthEnvGuard {
     fn drop(&mut self) {
+        if self.values.is_none() {
+            return;
+        }
+
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for (name, value) in &self.values {
-            if let Some(value) = value {
-                std::env::set_var(name, value);
-            } else {
-                std::env::remove_var(name);
-            }
-        }
+        self.restore_without_locking();
     }
 }
 
@@ -116,9 +131,11 @@ fn env_lock() -> &'static std::sync::Mutex<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use env_test_support::SavedEnv;
 
     #[test]
     fn live_auth_env_override_guard_restores_adbc_env_vars() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let names = [
             "SNOWFLAKE_PRIVATE_KEY_PATH",
             "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE",
@@ -146,7 +163,8 @@ mod tests {
         std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE");
         std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_PASSWORD");
 
-        let guard = apply_live_auth_env_overrides();
+        let mut guard = LiveAuthEnvGuard::capture(ADBC_AUTH_ENV_VARS);
+        apply_live_auth_env_overrides_locked();
         assert_eq!(
             std::env::var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE")
                 .ok()
@@ -162,7 +180,7 @@ mod tests {
             )
         );
 
-        drop(guard);
+        guard.restore_without_locking();
 
         assert_eq!(
             std::env::var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE")
@@ -177,32 +195,5 @@ mod tests {
             None
         );
         Ok(())
-    }
-
-    struct SavedEnv {
-        values: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    }
-
-    impl SavedEnv {
-        fn capture(names: &[&'static str]) -> Self {
-            Self {
-                values: names
-                    .iter()
-                    .map(|name| (*name, std::env::var_os(name)))
-                    .collect(),
-            }
-        }
-    }
-
-    impl Drop for SavedEnv {
-        fn drop(&mut self) {
-            for (name, value) in &self.values {
-                if let Some(value) = value {
-                    std::env::set_var(name, value);
-                } else {
-                    std::env::remove_var(name);
-                }
-            }
-        }
     }
 }
