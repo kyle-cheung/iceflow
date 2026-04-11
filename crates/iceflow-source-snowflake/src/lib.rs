@@ -20,6 +20,12 @@ pub use binding::{SnowflakeBindingRequest, SnowflakeConnectorBinding, SnowflakeT
 pub use checkpoint::{decode_checkpoint, encode_checkpoint, Checkpoint};
 pub use config::{SnowflakeAuthMethod, SnowflakeSourceConfig};
 
+const EXTERNAL_ADBC_AUTH_ENV_VARS: &[&str] = &[
+    "ADBC_SNOWFLAKE_SQL_AUTH_TYPE",
+    "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY",
+    "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE",
+];
+
 pub struct SnowflakeSource {
     config: SnowflakeSourceConfig,
     source_id: String,
@@ -75,7 +81,7 @@ impl SourceAdapter for SnowflakeSource {
             ("warehouse".to_string(), self.config.warehouse.clone()),
             ("role".to_string(), self.config.role.clone()),
         ]);
-        if self.config.password.is_empty() {
+        if needs_external_password_warning(&self.config) {
             warnings.push(
                 "Snowflake password is empty; connection relies on external ADBC authentication environment"
                     .to_string(),
@@ -191,6 +197,18 @@ pub(crate) fn source_error(err: impl std::fmt::Display) -> SourceError {
     SourceError::msg(err.to_string())
 }
 
+fn needs_external_password_warning(config: &SnowflakeSourceConfig) -> bool {
+    matches!(config.auth_method, SnowflakeAuthMethod::Password)
+        && config.password.is_empty()
+        && !has_external_adbc_auth_env()
+}
+
+fn has_external_adbc_auth_env() -> bool {
+    EXTERNAL_ADBC_AUTH_ENV_VARS
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+}
+
 fn recreate_stream_at_checkpoint(
     client: &dyn client::SnowflakeClient,
     binding: &SnowflakeConnectorBinding,
@@ -281,6 +299,13 @@ mod tests {
         }
     }
 
+    fn sample_empty_password_config() -> SnowflakeSourceConfig {
+        SnowflakeSourceConfig {
+            password: String::new(),
+            ..sample_config()
+        }
+    }
+
     #[test]
     fn spec_reports_snowflake_source_class() {
         let source = SnowflakeSource::new(sample_config(), None, Box::new(FakeSnowflakeClient));
@@ -313,6 +338,57 @@ mod tests {
     }
 
     #[test]
+    fn unbound_check_warns_when_password_is_empty_without_external_auth_env() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _env = SavedEnv::capture(EXTERNAL_ADBC_AUTH_ENV_VARS);
+        for name in EXTERNAL_ADBC_AUTH_ENV_VARS {
+            std::env::remove_var(name);
+        }
+        let source = SnowflakeSource::new(
+            sample_empty_password_config(),
+            None,
+            Box::new(FakeSnowflakeClient),
+        );
+
+        let report = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.check())
+            .expect("check");
+
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("external ADBC authentication environment")));
+    }
+
+    #[test]
+    fn unbound_check_suppresses_empty_password_warning_when_external_auth_env_is_present() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _env = SavedEnv::capture(EXTERNAL_ADBC_AUTH_ENV_VARS);
+        for name in EXTERNAL_ADBC_AUTH_ENV_VARS {
+            std::env::remove_var(name);
+        }
+        std::env::set_var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE", "auth_jwt");
+        let source = SnowflakeSource::new(
+            sample_empty_password_config(),
+            None,
+            Box::new(FakeSnowflakeClient),
+        );
+
+        let report = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.check())
+            .expect("check");
+
+        assert!(!report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Snowflake password is empty")));
+    }
+
+    #[test]
     fn snapshot_query_casts_selected_columns_to_varchar() {
         let binding = SnowflakeConnectorBinding::from_request(SnowflakeBindingRequest {
             connector_name: "snowflake_customer_state_append".to_string(),
@@ -337,5 +413,37 @@ mod tests {
         assert!(query.contains("TO_VARCHAR(\"CUSTOMER_ID\") AS \"CUSTOMER_ID\""));
         assert!(query.contains("TO_VARCHAR(\"UPDATED_AT\") AS \"UPDATED_AT\""));
         assert!(query.contains("AT (STATEMENT => '01b12345-0600-1234-0000-000000000000')"));
+    }
+
+    struct SavedEnv {
+        values: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl SavedEnv {
+        fn capture(names: &[&'static str]) -> Self {
+            Self {
+                values: names
+                    .iter()
+                    .map(|name| (*name, std::env::var_os(name)))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for SavedEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.values {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
+
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        &ENV_LOCK
     }
 }

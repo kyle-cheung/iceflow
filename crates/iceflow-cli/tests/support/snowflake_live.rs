@@ -1,4 +1,7 @@
 use anyhow::{Error, Result};
+// Keep this path in sync with iceflow-source-snowflake's integration-test
+// support module. This avoids a test-support crate for one live harness today,
+// but each test binary still compiles its own module copy.
 #[path = "../../../iceflow-source-snowflake/tests/support/live_env.rs"]
 mod live_env;
 use iceflow_source_snowflake::{
@@ -11,12 +14,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use live_env::{
     apply_live_auth_env_overrides, load_repo_dotenv, optional_env, quote_string_literal,
-    required_env,
+    required_env, LiveAuthEnvGuard,
 };
 
 const LIVE_CLI_TABLE: &str = "ICEFLOW_TEST_CLI_CUSTOMER_STATE";
 
 pub struct LiveSnowflakeHarness {
+    _auth_env: LiveAuthEnvGuard,
     root: PathBuf,
     destination_root: PathBuf,
     config: SnowflakeSourceConfig,
@@ -26,7 +30,7 @@ pub struct LiveSnowflakeHarness {
 impl LiveSnowflakeHarness {
     pub fn new() -> Result<Self> {
         load_repo_dotenv()?;
-        apply_live_auth_env_overrides();
+        let auth_env = apply_live_auth_env_overrides();
 
         let root = next_temp_path("config");
         let destination_root = next_temp_path("warehouse");
@@ -79,6 +83,7 @@ table_mode = "append_only"
         )?;
 
         Ok(Self {
+            _auth_env: auth_env,
             root,
             destination_root,
             config: SnowflakeSourceConfig {

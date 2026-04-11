@@ -13,7 +13,7 @@ use iceflow_source_snowflake::{
 use iceflow_types::{TableId, TableMode};
 use support::live_env::{
     apply_live_auth_env_overrides, load_repo_dotenv, optional_env, quote_string_literal,
-    required_env,
+    required_env, LiveAuthEnvGuard,
 };
 use tokio::runtime::Builder;
 
@@ -41,6 +41,7 @@ fn live_capture_reads_snapshot_then_change_batches() -> Result<()> {
 }
 
 struct LiveSnowflakeHarness {
+    _auth_env: LiveAuthEnvGuard,
     config: SnowflakeSourceConfig,
     schema: String,
 }
@@ -48,9 +49,10 @@ struct LiveSnowflakeHarness {
 impl LiveSnowflakeHarness {
     fn new() -> Result<Self> {
         load_repo_dotenv()?;
-        apply_live_auth_env_overrides();
+        let auth_env = apply_live_auth_env_overrides();
 
         Ok(Self {
+            _auth_env: auth_env,
             config: SnowflakeSourceConfig {
                 source_label: "live".to_string(),
                 account: required_env("SNOWFLAKE_ACCOUNT")?,

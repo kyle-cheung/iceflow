@@ -1,6 +1,7 @@
-use anyhow::Result;
 use async_trait::async_trait;
 use iceflow_types::{CheckpointId, LogicalMutation, TableId, TableMode};
+
+use crate::SourceResult;
 
 #[allow(dead_code)] // Session implementations will own phase internally once live sources arrive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +54,7 @@ pub struct CheckpointAck {
 
 #[async_trait]
 pub trait SourceCaptureSession: Send {
-    async fn poll_batch(&mut self, req: BatchRequest) -> Result<BatchPoll>;
-    async fn checkpoint(&mut self, ack: CheckpointAck) -> Result<()>;
-    async fn close(&mut self) -> Result<()>;
+    async fn poll_batch(&mut self, req: BatchRequest) -> SourceResult<BatchPoll>;
+    async fn checkpoint(&mut self, ack: CheckpointAck) -> SourceResult<()>;
+    async fn close(&mut self) -> SourceResult<()>;
 }

@@ -1,5 +1,13 @@
 use anyhow::{Error, Result};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+const ADBC_AUTH_ENV_VARS: &[&str] = &[
+    "ADBC_SNOWFLAKE_SQL_AUTH_TYPE",
+    "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY",
+    "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE",
+    "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_PASSWORD",
+];
 
 pub fn quote_string_literal(value: &str) -> String {
     value.replace('\'', "''")
@@ -22,9 +30,42 @@ pub fn optional_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-pub fn apply_live_auth_env_overrides() {
+#[must_use]
+pub struct LiveAuthEnvGuard {
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl LiveAuthEnvGuard {
+    fn capture(names: &[&'static str]) -> Self {
+        Self {
+            values: names
+                .iter()
+                .map(|name| (*name, std::env::var_os(name)))
+                .collect(),
+        }
+    }
+}
+
+impl Drop for LiveAuthEnvGuard {
+    fn drop(&mut self) {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (name, value) in &self.values {
+            if let Some(value) = value {
+                std::env::set_var(name, value);
+            } else {
+                std::env::remove_var(name);
+            }
+        }
+    }
+}
+
+pub fn apply_live_auth_env_overrides() -> LiveAuthEnvGuard {
     let _guard = env_lock().lock().expect("env lock");
+    let auth_env = LiveAuthEnvGuard::capture(ADBC_AUTH_ENV_VARS);
     apply_live_auth_env_overrides_locked();
+    auth_env
 }
 
 fn repo_root() -> PathBuf {
@@ -70,4 +111,98 @@ fn load_dotenv_from(path: &Path) -> Result<()> {
 fn env_lock() -> &'static std::sync::Mutex<()> {
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     &ENV_LOCK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_auth_env_override_guard_restores_adbc_env_vars() -> Result<()> {
+        let names = [
+            "SNOWFLAKE_PRIVATE_KEY_PATH",
+            "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE",
+            "ADBC_SNOWFLAKE_SQL_AUTH_TYPE",
+            "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY",
+            "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE",
+            "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_PASSWORD",
+        ];
+        let _restore = SavedEnv::capture(&names);
+        let key_path = std::env::temp_dir().join(format!(
+            "iceflow-live-env-key-{}-{}.p8",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(
+            &key_path,
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc123\n-----END ENCRYPTED PRIVATE KEY-----\n",
+        )
+        .map_err(|err| Error::msg(format!("failed to write test key: {err}")))?;
+
+        std::env::set_var("SNOWFLAKE_PRIVATE_KEY_PATH", &key_path);
+        std::env::set_var("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE", "topsecret");
+        std::env::set_var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE", "previous_auth");
+        std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY");
+        std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE");
+        std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_PASSWORD");
+
+        let guard = apply_live_auth_env_overrides();
+        assert_eq!(
+            std::env::var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE")
+                .ok()
+                .as_deref(),
+            Some("auth_jwt")
+        );
+        assert_eq!(
+            std::env::var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE")
+                .ok()
+                .as_deref(),
+            Some(
+                "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc123\n-----END ENCRYPTED PRIVATE KEY-----\n"
+            )
+        );
+
+        drop(guard);
+
+        assert_eq!(
+            std::env::var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE")
+                .ok()
+                .as_deref(),
+            Some("previous_auth")
+        );
+        assert_eq!(
+            std::env::var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE")
+                .ok()
+                .as_deref(),
+            None
+        );
+        Ok(())
+    }
+
+    struct SavedEnv {
+        values: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl SavedEnv {
+        fn capture(names: &[&'static str]) -> Self {
+            Self {
+                values: names
+                    .iter()
+                    .map(|name| (*name, std::env::var_os(name)))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for SavedEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.values {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
 }

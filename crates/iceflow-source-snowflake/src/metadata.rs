@@ -35,7 +35,7 @@ pub fn load_table_metadata(
     })
 }
 
-pub fn load_schema_fingerprint(
+pub(crate) fn load_schema_fingerprint(
     client: &dyn crate::client::SnowflakeClient,
     binding: &crate::binding::SnowflakeConnectorBinding,
 ) -> Result<String> {
