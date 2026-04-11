@@ -2,6 +2,8 @@ use anyhow::{Error, Result};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+// This mirrors the existing cross-crate test-support #[path] pattern. If more
+// shared helpers accumulate, move them into an iceflow-test-support dev crate.
 #[path = "../../src/env_test_support.rs"]
 mod env_test_support;
 
@@ -50,7 +52,8 @@ impl LiveAuthEnvGuard {
         }
     }
 
-    fn restore_without_locking(&mut self) {
+    // Caller must hold env_lock(); Drop handles locking for normal guard cleanup.
+    fn restore_under_held_lock(&mut self) {
         if let Some(values) = self.values.take() {
             for (name, value) in values {
                 if let Some(value) = value {
@@ -72,7 +75,7 @@ impl Drop for LiveAuthEnvGuard {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.restore_without_locking();
+        self.restore_under_held_lock();
     }
 }
 
@@ -180,7 +183,7 @@ mod tests {
             )
         );
 
-        guard.restore_without_locking();
+        guard.restore_under_held_lock();
 
         assert_eq!(
             std::env::var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE")
