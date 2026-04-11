@@ -16,10 +16,7 @@ pub fn load_table_metadata(
         return Err(Error::msg("Snowflake v1 requires a declared primary key"));
     }
 
-    let described = client.query_rows(&format!(
-        "DESCRIBE TABLE {}",
-        crate::client::qualified_table_name(&binding.source_schema, &binding.source_table),
-    ))?;
+    let described = describe_table(client, binding)?;
     let columns = described
         .rows
         .iter()
@@ -29,23 +26,46 @@ pub fn load_table_metadata(
     if columns.is_empty() {
         return Err(Error::msg("Snowflake table metadata returned no columns"));
     }
-    let schema_fingerprint = format!(
-        "{}:{}:{}",
-        binding.source_schema,
-        binding.source_table,
-        described
-            .rows
-            .iter()
-            .map(|row| row.join("|"))
-            .collect::<Vec<_>>()
-            .join(";"),
-    );
+    let schema_fingerprint = schema_fingerprint(binding, &described.rows);
 
     Ok(TableMetadata {
         primary_keys,
         columns,
         schema_fingerprint,
     })
+}
+
+pub fn load_schema_fingerprint(
+    client: &dyn crate::client::SnowflakeClient,
+    binding: &crate::binding::SnowflakeConnectorBinding,
+) -> Result<String> {
+    let described = describe_table(client, binding)?;
+    Ok(schema_fingerprint(binding, &described.rows))
+}
+
+fn describe_table(
+    client: &dyn crate::client::SnowflakeClient,
+    binding: &crate::binding::SnowflakeConnectorBinding,
+) -> Result<crate::client::RowSet> {
+    client.query_rows(&format!(
+        "DESCRIBE TABLE {}",
+        crate::client::qualified_table_name(&binding.source_schema, &binding.source_table),
+    ))
+}
+
+fn schema_fingerprint(
+    binding: &crate::binding::SnowflakeConnectorBinding,
+    rows: &[Vec<String>],
+) -> String {
+    format!(
+        "{}:{}:{}",
+        binding.source_schema,
+        binding.source_table,
+        rows.iter()
+            .map(|row| row.join("|"))
+            .collect::<Vec<_>>()
+            .join(";"),
+    )
 }
 
 fn load_primary_keys(
@@ -59,7 +79,7 @@ fn load_primary_keys(
     ))?;
     let rows = client.query_rows(&format!(
         "SELECT \"column_name\" FROM TABLE(RESULT_SCAN('{}')) ORDER BY \"key_sequence\"",
-        quote_literal_value(&show.query_id),
+        crate::client::quote_literal_value(&show.query_id),
     ))?;
 
     Ok(rows
@@ -68,10 +88,6 @@ fn load_primary_keys(
         .filter_map(|row| row.first().cloned())
         .filter(|column| !column.trim().is_empty())
         .collect())
-}
-
-fn quote_literal_value(value: &str) -> String {
-    value.replace('\'', "''")
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 #[test]
 #[ignore = "requires live Snowflake credentials"]
 fn current_timestamp_query_id_is_usable_for_changes_end_statement() -> Result<()> {
+    let _guard = live_probe_table_lock().lock().expect("live probe lock");
     let client = AdbcSnowflakeClient::connect(live_config()?)?;
     let table = live_probe_table_name();
 
@@ -113,6 +114,7 @@ fn list_accessible_schemas_for_live_database() -> Result<()> {
 #[test]
 #[ignore = "requires live Snowflake credentials"]
 fn diagnose_last_query_id_offsets() -> Result<()> {
+    let _guard = live_probe_table_lock().lock().expect("live probe lock");
     let mut connection = open_explicit_connection()?;
     let table = live_probe_table_name();
 
@@ -170,6 +172,7 @@ fn diagnose_current_session_is_stable_across_statements() -> Result<()> {
 #[test]
 #[ignore = "requires live Snowflake credentials"]
 fn diagnose_last_query_id_candidates_from_single_follow_up_query() -> Result<()> {
+    let _guard = live_probe_table_lock().lock().expect("live probe lock");
     let mut connection = open_explicit_connection()?;
     let table = live_probe_table_name();
 
@@ -553,4 +556,9 @@ fn maps_private_key_path_to_pkcs8_value_env_vars() {
 fn env_lock() -> &'static std::sync::Mutex<()> {
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     &ENV_LOCK
+}
+
+fn live_probe_table_lock() -> &'static std::sync::Mutex<()> {
+    static LIVE_PROBE_TABLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LIVE_PROBE_TABLE_LOCK
 }

@@ -1,11 +1,10 @@
 use crate::client::RowSet;
 use crate::metadata::TableMetadata;
 use anyhow::{Error, Result};
-use chrono::Utc;
 use iceflow_types::{
-    ordering, CheckpointId, LogicalMutation, SourceClass, StructuredKey, TableId, TableMode,
+    ordering, CheckpointId, IceflowJsonValue as Value, IceflowUtc, LogicalMutation, SourceClass,
+    StructuredKey, TableId, TableMode,
 };
-use serde_json::Value;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
@@ -324,7 +323,7 @@ fn build_mutation(
             ordering("snowflake_ordinal", ordering_value),
             ctx.checkpoint.clone(),
             1,
-            Utc::now(),
+            IceflowUtc::now(),
             source_metadata,
         ),
         OperationKind::Upsert => LogicalMutation::upsert(
@@ -336,7 +335,7 @@ fn build_mutation(
             ordering("snowflake_ordinal", ordering_value),
             ctx.checkpoint.clone(),
             1,
-            Utc::now(),
+            IceflowUtc::now(),
             source_metadata,
         ),
         OperationKind::Delete => LogicalMutation::delete(
@@ -348,7 +347,7 @@ fn build_mutation(
             ordering("snowflake_ordinal", ordering_value),
             ctx.checkpoint.clone(),
             1,
-            Utc::now(),
+            IceflowUtc::now(),
             source_metadata,
         ),
     };
@@ -472,7 +471,7 @@ pub(crate) fn test_mutations(count: usize, checkpoint: &str) -> Result<Vec<Logic
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use iceflow_types::IceflowJsonValue as Value;
 
     fn change_row(
         row_id: &str,

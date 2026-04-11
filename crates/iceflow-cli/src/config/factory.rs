@@ -93,24 +93,12 @@ pub fn build_source_from_config(
             )))
         }
         "snowflake" => {
-            let typed = iceflow_source_snowflake::SnowflakeSourceConfig::from_properties(
-                config
-                    .properties
-                    .get("source_label")
-                    .cloned()
-                    .unwrap_or_else(|| "snowflake".to_string()),
-                &config.properties,
-            )
-            .map_err(|err| Error::msg(err.to_string()))?;
-            let client =
-                iceflow_source_snowflake::client::AdbcSnowflakeClient::connect(typed.clone())
-                    .map_err(|err| Error::msg(err.to_string()))?;
-
-            Ok(Box::new(iceflow_source_snowflake::SnowflakeSource::new(
-                typed,
-                None,
-                Box::new(client),
-            )))
+            let source_label = config
+                .properties
+                .get("source_label")
+                .cloned()
+                .unwrap_or_else(|| "snowflake".to_string());
+            build_snowflake_source(config, source_label, None)
         }
         other => Err(Error::msg(format!("unsupported source kind: {other}"))),
     }
@@ -131,11 +119,6 @@ pub fn build_bound_source_from_config(
     match config.kind.as_str() {
         "file" => build_source_from_config(config, config_base),
         "snowflake" => {
-            let typed = iceflow_source_snowflake::SnowflakeSourceConfig::from_properties(
-                ctx.connector.source.clone(),
-                &config.properties,
-            )
-            .map_err(|err| Error::msg(err.to_string()))?;
             let binding = iceflow_source_snowflake::SnowflakeConnectorBinding::from_request(
                 iceflow_source_snowflake::SnowflakeBindingRequest {
                     connector_name: ctx.connector_name.clone(),
@@ -155,18 +138,30 @@ pub fn build_bound_source_from_config(
                 },
             )
             .map_err(|err| Error::msg(err.to_string()))?;
-            let client =
-                iceflow_source_snowflake::client::AdbcSnowflakeClient::connect(typed.clone())
-                    .map_err(|err| Error::msg(err.to_string()))?;
-
-            Ok(Box::new(iceflow_source_snowflake::SnowflakeSource::new(
-                typed,
-                Some(binding),
-                Box::new(client),
-            )))
+            build_snowflake_source(config, ctx.connector.source.clone(), Some(binding))
         }
         other => Err(Error::msg(format!("unsupported source kind: {other}"))),
     }
+}
+
+fn build_snowflake_source(
+    config: &SourceConfig,
+    source_label: String,
+    binding: Option<iceflow_source_snowflake::SnowflakeConnectorBinding>,
+) -> Result<Box<dyn SourceAdapter>> {
+    let typed = iceflow_source_snowflake::SnowflakeSourceConfig::from_properties(
+        source_label,
+        &config.properties,
+    )
+    .map_err(|err| Error::msg(err.to_string()))?;
+    let client = iceflow_source_snowflake::client::AdbcSnowflakeClient::connect(typed.clone())
+        .map_err(|err| Error::msg(err.to_string()))?;
+
+    Ok(Box::new(iceflow_source_snowflake::SnowflakeSource::new(
+        typed,
+        binding,
+        Box::new(client),
+    )))
 }
 
 pub fn build_sink_from_config(

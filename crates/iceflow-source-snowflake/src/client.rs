@@ -104,6 +104,10 @@ pub fn qualified_table_name(schema: &str, table: &str) -> String {
     format!("{}.{}", quote_identifier(schema), quote_identifier(table))
 }
 
+pub(crate) fn quote_literal_value(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
 fn apply_config_to_database_builder(
     builder: database::Builder,
     config: &SnowflakeSourceConfig,

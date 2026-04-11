@@ -8,10 +8,9 @@ mod value;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use iceflow_anyhow::Result as SourceResult;
 use iceflow_source::{
     validate_source_spec, OpenCaptureRequest, SourceAdapter, SourceCapability, SourceCheckReport,
-    SourceSpec,
+    SourceError, SourceResult, SourceSpec,
 };
 use iceflow_types::SourceClass;
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,6 +22,7 @@ pub use config::{SnowflakeAuthMethod, SnowflakeSourceConfig};
 
 pub struct SnowflakeSource {
     config: SnowflakeSourceConfig,
+    source_id: String,
     binding: Option<SnowflakeConnectorBinding>,
     client: Arc<dyn client::SnowflakeClient + Send + Sync>,
 }
@@ -33,15 +33,17 @@ impl SnowflakeSource {
         binding: Option<SnowflakeConnectorBinding>,
         client: Box<dyn client::SnowflakeClient + Send + Sync>,
     ) -> Self {
+        let source_id = format!("snowflake.config.{}", config.source_label);
         Self {
             config,
+            source_id,
             binding,
             client: Arc::from(client),
         }
     }
 
-    fn source_id(&self) -> String {
-        format!("snowflake.config.{}", self.config.source_label)
+    fn source_id(&self) -> &str {
+        &self.source_id
     }
 }
 
@@ -49,7 +51,7 @@ impl SnowflakeSource {
 impl SourceAdapter for SnowflakeSource {
     async fn spec(&self) -> SourceResult<SourceSpec> {
         let spec = SourceSpec {
-            source_id: self.source_id(),
+            source_id: self.source_id().to_string(),
             source_class: SourceClass::DatabaseCdc,
         };
         validate_source_spec(&spec)?;
@@ -73,6 +75,12 @@ impl SourceAdapter for SnowflakeSource {
             ("warehouse".to_string(), self.config.warehouse.clone()),
             ("role".to_string(), self.config.role.clone()),
         ]);
+        if self.config.password.is_empty() {
+            warnings.push(
+                "Snowflake password is empty; connection relies on external ADBC authentication environment"
+                    .to_string(),
+            );
+        }
 
         if let Some(binding) = &self.binding {
             let metadata = metadata::load_table_metadata(self.client.as_ref(), binding)
@@ -125,7 +133,7 @@ impl SourceAdapter for SnowflakeSource {
             recreate_stream_at_checkpoint(self.client.as_ref(), binding, &decoded)
                 .map_err(source_error)?;
             return Ok(Box::new(session::SnowflakeCaptureSession::new_incremental(
-                self.source_id(),
+                self.source_id().to_string(),
                 req.table.table_id,
                 req.table.table_mode,
                 binding.clone(),
@@ -149,7 +157,7 @@ impl SourceAdapter for SnowflakeSource {
         let records = value::snapshot_rows_to_mutations(
             value::MutationContext::new(
                 req.table.table_id.clone(),
-                self.source_id(),
+                self.source_id().to_string(),
                 req.table.table_mode,
                 &metadata,
                 checkpoint_end.clone(),
@@ -167,7 +175,7 @@ impl SourceAdapter for SnowflakeSource {
 
         Ok(Box::new(
             session::SnowflakeCaptureSession::new_with_snapshot(
-                self.source_id(),
+                self.source_id().to_string(),
                 req.table.table_id,
                 req.table.table_mode,
                 binding.clone(),
@@ -179,8 +187,8 @@ impl SourceAdapter for SnowflakeSource {
     }
 }
 
-pub(crate) fn source_error(err: impl std::fmt::Display) -> iceflow_anyhow::Error {
-    iceflow_anyhow::Error::msg(err.to_string())
+pub(crate) fn source_error(err: impl std::fmt::Display) -> SourceError {
+    SourceError::msg(err.to_string())
 }
 
 fn recreate_stream_at_checkpoint(
@@ -223,7 +231,7 @@ fn snapshot_query(
     format!(
         "SELECT {select_list} FROM {} AT (STATEMENT => '{}') ORDER BY {}",
         client::qualified_table_name(&binding.source_schema, &binding.source_table),
-        session::quote_literal_value(anchor_query_id),
+        client::quote_literal_value(anchor_query_id),
         order_by,
     )
 }
@@ -237,7 +245,7 @@ fn create_stream_at_statement_sql(binding: &SnowflakeConnectorBinding, query_id:
         "CREATE OR REPLACE STREAM {} ON TABLE {} AT (STATEMENT => '{}')",
         managed_stream_sql_name(binding),
         client::qualified_table_name(&binding.source_schema, &binding.source_table),
-        session::quote_literal_value(query_id),
+        client::quote_literal_value(query_id),
     )
 }
 

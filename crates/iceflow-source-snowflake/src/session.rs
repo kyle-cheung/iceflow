@@ -6,8 +6,9 @@ use crate::client::{RowSet, StatementOutcome};
 use crate::metadata::TableMetadata;
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use iceflow_anyhow::Result as SourceResult;
-use iceflow_source::{BatchPoll, BatchRequest, CheckpointAck, SourceBatch, SourceCaptureSession};
+use iceflow_source::{
+    BatchPoll, BatchRequest, CheckpointAck, SourceBatch, SourceCaptureSession, SourceResult,
+};
 #[cfg(test)]
 use iceflow_types::CheckpointId;
 use iceflow_types::{TableId, TableMode};
@@ -114,11 +115,11 @@ impl SnowflakeCaptureSession {
     }
 
     fn poll_incremental(&mut self, last_durable_boundary: Checkpoint) -> Result<BatchPoll> {
-        let actual_metadata =
-            crate::metadata::load_table_metadata(self.client.as_ref(), &self.binding)?;
+        let actual_schema_fingerprint =
+            crate::metadata::load_schema_fingerprint(self.client.as_ref(), &self.binding)?;
         crate::value::verify_schema_fingerprint(
             &self.metadata.schema_fingerprint,
-            &actual_metadata.schema_fingerprint,
+            &actual_schema_fingerprint,
         )?;
 
         let boundary = self.client.exec("SELECT CURRENT_TIMESTAMP()")?;
@@ -165,16 +166,16 @@ impl SnowflakeCaptureSession {
 #[async_trait]
 impl SourceCaptureSession for SnowflakeCaptureSession {
     async fn poll_batch(&mut self, _req: BatchRequest) -> SourceResult<BatchPoll> {
-        if let Some(batch) = self.pending.clone() {
-            return Ok(BatchPoll::Batch(batch));
+        if let Some(batch) = self.pending.as_ref() {
+            return Ok(BatchPoll::Batch(batch.clone()));
         }
 
-        match self.phase.clone() {
+        match &self.phase {
             SessionPhase::Snapshot => Ok(BatchPoll::Idle),
             SessionPhase::Incremental {
                 last_durable_boundary,
             } => self
-                .poll_incremental(last_durable_boundary)
+                .poll_incremental(last_durable_boundary.clone())
                 .map_err(crate::source_error),
         }
     }
@@ -213,10 +214,6 @@ impl SnowflakeCaptureSession {
     }
 }
 
-pub(crate) fn quote_literal_value(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
 pub(crate) fn changes_query(
     binding: &SnowflakeConnectorBinding,
     metadata: &TableMetadata,
@@ -244,8 +241,8 @@ pub(crate) fn changes_query(
     format!(
         "SELECT {select_list} FROM {} CHANGES(INFORMATION => DEFAULT) AT (STATEMENT => '{}') END(STATEMENT => '{}')",
         crate::client::qualified_table_name(&binding.source_schema, &binding.source_table),
-        quote_literal_value(start_query_id),
-        quote_literal_value(end_query_id),
+        crate::client::quote_literal_value(start_query_id),
+        crate::client::quote_literal_value(end_query_id),
     )
 }
 

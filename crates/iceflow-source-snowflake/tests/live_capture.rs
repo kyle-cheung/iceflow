@@ -1,3 +1,5 @@
+mod support;
+
 use anyhow::{Error, Result};
 use iceflow_source::{
     BatchPoll, BatchRequest, CheckpointAck, OpenCaptureRequest, SourceAdapter, SourceBatch,
@@ -9,8 +11,13 @@ use iceflow_source_snowflake::{
     SnowflakeSourceConfig, SnowflakeTableBinding,
 };
 use iceflow_types::{TableId, TableMode};
-use std::path::{Path, PathBuf};
+use support::live_env::{
+    apply_live_auth_env_overrides, load_repo_dotenv, optional_env, quote_string_literal,
+    required_env,
+};
 use tokio::runtime::Builder;
+
+const LIVE_CAPTURE_TABLE: &str = "ICEFLOW_TEST_SOURCE_CUSTOMER_STATE";
 
 #[test]
 #[ignore = "requires live Snowflake credentials"]
@@ -63,7 +70,7 @@ impl LiveSnowflakeHarness {
     }
 
     fn table_name(&self) -> String {
-        qualified_table_name(&self.schema, "CUSTOMER_STATE")
+        qualified_table_name(&self.schema, LIVE_CAPTURE_TABLE)
     }
 
     fn reset_customer_state(&self) -> Result<()> {
@@ -124,7 +131,7 @@ impl LiveSnowflakeHarness {
             connector_name: "snowflake_customer_state_append".to_string(),
             tables: vec![SnowflakeTableBinding {
                 source_schema: self.schema.clone(),
-                source_table: "CUSTOMER_STATE".to_string(),
+                source_table: LIVE_CAPTURE_TABLE.to_string(),
                 destination_namespace: "customer_state".to_string(),
                 destination_table: "customer_state".to_string(),
                 table_mode: "append_only".to_string(),
@@ -166,75 +173,4 @@ impl LiveSnowflakeHarness {
             snapshot_uri: "file:///tmp/live-snowflake".to_string(),
         }
     }
-}
-
-fn quote_string_literal(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
-fn load_repo_dotenv() -> Result<()> {
-    let path = repo_root().join(".env");
-    if !path.exists() {
-        return Ok(());
-    }
-
-    load_dotenv_from(&path)
-}
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-}
-
-fn required_env(name: &str) -> Result<String> {
-    std::env::var(name).map_err(|err| Error::msg(format!("missing env var {name}: {err}")))
-}
-
-fn optional_env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|value| !value.is_empty())
-}
-
-fn apply_live_auth_env_overrides() {
-    let _guard = env_lock().lock().expect("env lock");
-    apply_live_auth_env_overrides_locked();
-}
-
-fn apply_live_auth_env_overrides_locked() {
-    if let Ok(private_key_contents) = load_private_key_pkcs8_value() {
-        std::env::set_var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE", "auth_jwt");
-        std::env::remove_var("ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY");
-        std::env::set_var(
-            "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE",
-            private_key_contents,
-        );
-
-        if let Some(passphrase) = optional_env("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE") {
-            std::env::set_var(
-                "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_PASSWORD",
-                passphrase,
-            );
-        }
-    }
-}
-
-fn load_private_key_pkcs8_value() -> Result<String> {
-    let private_key_path = required_env("SNOWFLAKE_PRIVATE_KEY_PATH")?;
-    std::fs::read_to_string(&private_key_path).map_err(|err| {
-        Error::msg(format!(
-            "failed to read private key file {private_key_path}: {err}"
-        ))
-    })
-}
-
-fn load_dotenv_from(path: &Path) -> Result<()> {
-    let _guard = env_lock().lock().expect("env lock");
-    dotenvy::from_path_override(path)
-        .map_err(|err| Error::msg(format!("failed to load {}: {err}", path.display())))
-}
-
-fn env_lock() -> &'static std::sync::Mutex<()> {
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    &ENV_LOCK
 }
