@@ -1,0 +1,10 @@
+version = 1
+source = "local_snowflake"
+destination = "local_fs"
+
+[[tables]]
+source_schema = "PUBLIC"
+source_table = "CUSTOMER_STATE"
+destination_namespace = "customer_state"
+destination_table = "customer_state"
+table_mode = "append_only"

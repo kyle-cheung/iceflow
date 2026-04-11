@@ -48,7 +48,7 @@ impl SnowflakeSourceConfig {
             source_label: source_label.into(),
             account: required(properties, "account")?.to_string(),
             user: required(properties, "user")?.to_string(),
-            password: required(properties, "password")?.to_string(),
+            password: properties.get("password").cloned().unwrap_or_default(),
             warehouse: required(properties, "warehouse")?.to_string(),
             role: required(properties, "role")?.to_string(),
             database: required(properties, "database")?.to_string(),
@@ -105,6 +105,24 @@ mod tests {
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("super-secret"));
+    }
+
+    #[test]
+    fn parses_password_auth_config_without_password_for_external_adbc_auth() {
+        let config = SnowflakeSourceConfig::from_properties(
+            "local_snowflake",
+            &BTreeMap::from([
+                ("account".to_string(), "xy12345.us-east-1".to_string()),
+                ("user".to_string(), "ICEFLOW_DEMO".to_string()),
+                ("warehouse".to_string(), "ICEFLOW_WH".to_string()),
+                ("role".to_string(), "ICEFLOW_ROLE".to_string()),
+                ("database".to_string(), "SOURCE_DB".to_string()),
+                ("auth_method".to_string(), "password".to_string()),
+            ]),
+        )
+        .expect("valid config");
+
+        assert!(config.password.is_empty());
     }
 
     #[test]

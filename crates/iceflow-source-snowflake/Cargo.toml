@@ -10,8 +10,11 @@ anyhow = "1"
 async-trait = "0.1"
 arrow-array = "57"
 arrow-cast = "57"
+chrono = { path = "../chrono" }
 iceflow-source = { path = "../iceflow-source" }
 iceflow-types = { path = "../iceflow-types" }
+iceflow-anyhow = { package = "anyhow", path = "../anyhow" }
+serde_json = { path = "../serde_json" }
 
 [dev-dependencies]
 dotenvy = "0.15"

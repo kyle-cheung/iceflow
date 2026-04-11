@@ -92,6 +92,26 @@ pub fn build_source_from_config(
                 fixture_root_label.to_string(),
             )))
         }
+        "snowflake" => {
+            let typed = iceflow_source_snowflake::SnowflakeSourceConfig::from_properties(
+                config
+                    .properties
+                    .get("source_label")
+                    .cloned()
+                    .unwrap_or_else(|| "snowflake".to_string()),
+                &config.properties,
+            )
+            .map_err(|err| Error::msg(err.to_string()))?;
+            let client =
+                iceflow_source_snowflake::client::AdbcSnowflakeClient::connect(typed.clone())
+                    .map_err(|err| Error::msg(err.to_string()))?;
+
+            Ok(Box::new(iceflow_source_snowflake::SnowflakeSource::new(
+                typed,
+                None,
+                Box::new(client),
+            )))
+        }
         other => Err(Error::msg(format!("unsupported source kind: {other}"))),
     }
 }
@@ -110,10 +130,41 @@ pub fn build_bound_source_from_config(
 ) -> Result<Box<dyn SourceAdapter>> {
     match config.kind.as_str() {
         "file" => build_source_from_config(config, config_base),
-        "snowflake" => Err(Error::msg(format!(
-            "snowflake source '{}' is scaffolded but not wired into connector run/check in this build",
-            ctx.connector_name
-        ))),
+        "snowflake" => {
+            let typed = iceflow_source_snowflake::SnowflakeSourceConfig::from_properties(
+                ctx.connector.source.clone(),
+                &config.properties,
+            )
+            .map_err(|err| Error::msg(err.to_string()))?;
+            let binding = iceflow_source_snowflake::SnowflakeConnectorBinding::from_request(
+                iceflow_source_snowflake::SnowflakeBindingRequest {
+                    connector_name: ctx.connector_name.clone(),
+                    tables: ctx
+                        .connector
+                        .tables
+                        .iter()
+                        .map(|table| iceflow_source_snowflake::SnowflakeTableBinding {
+                            source_schema: table.source_schema.clone(),
+                            source_table: table.source_table.clone(),
+                            destination_namespace: table.destination_namespace.clone(),
+                            destination_table: table.destination_table.clone(),
+                            table_mode: table.table_mode.clone(),
+                        })
+                        .collect(),
+                    durable_checkpoint: ctx.durable_checkpoint.clone(),
+                },
+            )
+            .map_err(|err| Error::msg(err.to_string()))?;
+            let client =
+                iceflow_source_snowflake::client::AdbcSnowflakeClient::connect(typed.clone())
+                    .map_err(|err| Error::msg(err.to_string()))?;
+
+            Ok(Box::new(iceflow_source_snowflake::SnowflakeSource::new(
+                typed,
+                Some(binding),
+                Box::new(client),
+            )))
+        }
         other => Err(Error::msg(format!("unsupported source kind: {other}"))),
     }
 }

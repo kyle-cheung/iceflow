@@ -640,6 +640,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow 0.1.0",
  "async-trait",
+ "dotenvy",
  "iceflow-runtime",
  "iceflow-sink",
  "iceflow-source",
@@ -694,13 +695,16 @@ version = "0.1.0"
 dependencies = [
  "adbc_core",
  "adbc_snowflake",
+ "anyhow 0.1.0",
  "anyhow 1.0.102",
  "arrow-array",
  "arrow-cast",
  "async-trait",
+ "chrono 0.1.0",
  "dotenvy",
  "iceflow-source",
  "iceflow-types",
+ "serde_json 0.1.0",
  "tokio",
 ]
 

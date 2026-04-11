@@ -378,11 +378,19 @@ fn build_bound_source_from_config_routes_file_tables_through_fixture_root() -> R
 }
 
 #[test]
-fn build_bound_source_from_config_reports_snowflake_scaffold_status() {
+fn build_bound_source_from_config_routes_snowflake_to_binding_validation() {
     let source_config = SourceConfig {
         version: 1,
         kind: "snowflake".to_string(),
-        properties: BTreeMap::new(),
+        properties: BTreeMap::from([
+            ("account".to_string(), "xy12345.us-east-1".to_string()),
+            ("user".to_string(), "ICEFLOW_DEMO".to_string()),
+            ("password".to_string(), "secret".to_string()),
+            ("warehouse".to_string(), "ICEFLOW_WH".to_string()),
+            ("role".to_string(), "ICEFLOW_ROLE".to_string()),
+            ("database".to_string(), "SOURCE_DB".to_string()),
+            ("auth_method".to_string(), "password".to_string()),
+        ]),
     };
     let connector = ConnectorConfig {
         version: 1,
@@ -403,11 +411,11 @@ fn build_bound_source_from_config_reports_snowflake_scaffold_status() {
         },
     );
     let err = match result {
-        Ok(_) => panic!("snowflake source should still be scaffold-only"),
+        Ok(_) => panic!("snowflake source should reject invalid binding"),
         Err(err) => err,
     };
 
-    assert!(err.to_string().contains("scaffolded but not wired"));
+    assert!(err.to_string().contains("exactly one selected table"));
 }
 
 #[test]
