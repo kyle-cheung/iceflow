@@ -126,14 +126,10 @@ impl SnowflakeCaptureSession {
         let checkpoint_end = encode_checkpoint(Checkpoint::Stream {
             boundary_query_id: boundary.query_id.clone(),
         });
-        let start_query_id = match &last_durable_boundary {
-            Checkpoint::Snapshot { anchor_query_id } => anchor_query_id,
-            Checkpoint::Stream { boundary_query_id } => boundary_query_id,
-        };
-        let rows = self.client.query_rows(&changes_query(
+        let rows = self.client.query_rows(&changes_query_from_checkpoint(
             &self.binding,
             &self.metadata,
-            start_query_id,
+            &last_durable_boundary,
             &boundary.query_id,
         ))?;
         let records = crate::value::collapse_change_rows(
@@ -214,10 +210,33 @@ impl SnowflakeCaptureSession {
     }
 }
 
-pub(crate) fn changes_query(
+fn changes_query_from_checkpoint(
     binding: &SnowflakeConnectorBinding,
     metadata: &TableMetadata,
-    start_query_id: &str,
+    start: &Checkpoint,
+    end_query_id: &str,
+) -> String {
+    let start_clause = match start {
+        Checkpoint::Snapshot { .. } => format!(
+            "AT (STREAM => '{}')",
+            crate::client::quote_literal_value(&crate::client::qualified_table_name(
+                &binding.source_schema,
+                &binding.managed_stream_name,
+            )),
+        ),
+        Checkpoint::Stream { boundary_query_id } => format!(
+            "AT (STATEMENT => '{}')",
+            crate::client::quote_literal_value(boundary_query_id),
+        ),
+    };
+
+    changes_query_with_start_clause(binding, metadata, &start_clause, end_query_id)
+}
+
+fn changes_query_with_start_clause(
+    binding: &SnowflakeConnectorBinding,
+    metadata: &TableMetadata,
+    start_clause: &str,
     end_query_id: &str,
 ) -> String {
     let select_list =
@@ -239,9 +258,8 @@ pub(crate) fn changes_query(
             .join(", ");
 
     format!(
-        "SELECT {select_list} FROM {} CHANGES(INFORMATION => DEFAULT) AT (STATEMENT => '{}') END(STATEMENT => '{}')",
+        "SELECT {select_list} FROM {} CHANGES(INFORMATION => DEFAULT) {start_clause} END(STATEMENT => '{}')",
         crate::client::qualified_table_name(&binding.source_schema, &binding.source_table),
-        crate::client::quote_literal_value(start_query_id),
         crate::client::quote_literal_value(end_query_id),
     )
 }
@@ -334,7 +352,9 @@ impl SnowflakeClient for TestSnowflakeClient {
 #[cfg(test)]
 mod tests {
     use crate::checkpoint::{decode_checkpoint, Checkpoint};
+    use crate::client::{RowSet, SnowflakeClient, StatementOutcome};
     use iceflow_source::{BatchPoll, BatchRequest, SourceCaptureSession};
+    use std::sync::{Arc, Mutex};
     use tokio::runtime::Builder;
 
     #[test]
@@ -403,10 +423,12 @@ mod tests {
         let binding = super::test_binding(None);
         let metadata = super::test_metadata();
 
-        let query = super::changes_query(
+        let query = super::changes_query_from_checkpoint(
             &binding,
             &metadata,
-            "01b12345-0601-1234-0000-000000000000",
+            &Checkpoint::Stream {
+                boundary_query_id: "01b12345-0601-1234-0000-000000000000".to_string(),
+            },
             "01b12345-0602-1234-0000-000000000000",
         );
 
@@ -415,11 +437,99 @@ mod tests {
         assert!(query.contains("TO_VARCHAR(\"NAME\") AS \"NAME\""));
     }
 
+    #[test]
+    fn first_incremental_after_snapshot_checkpoint_uses_stream_anchor() {
+        let client = RecordingIncrementalClient::default();
+        let binding = super::test_binding(None);
+        let mut session = super::SnowflakeCaptureSession::new_incremental(
+            "snowflake.config.local_snowflake".to_string(),
+            iceflow_types::TableId::from("customer_state.customer_state"),
+            iceflow_types::TableMode::AppendOnly,
+            binding.clone(),
+            Arc::new(client.clone()),
+            super::test_metadata(),
+            Checkpoint::Snapshot {
+                anchor_query_id: "01b12345-0600-1234-0000-000000000000".to_string(),
+            },
+        );
+
+        let poll = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(session.poll_batch(BatchRequest::default()))
+            .expect("poll");
+        assert!(matches!(poll, BatchPoll::Batch(_)));
+
+        let queries = client.queries.lock().expect("queries");
+        let changes_query = queries
+            .iter()
+            .find(|sql| sql.contains("CHANGES(INFORMATION => DEFAULT)"))
+            .expect("changes query");
+
+        assert!(changes_query.contains("AT (STREAM =>"));
+        assert!(changes_query.contains(&binding.managed_stream_name));
+        assert!(changes_query.contains("END(STATEMENT => '01b12345-0602-1234-0000-000000000000')"));
+        assert!(!changes_query.contains("AT (STATEMENT => '01b12345-0600-1234-0000-000000000000')"));
+    }
+
     fn fake_snapshot_rows() -> Vec<iceflow_types::LogicalMutation> {
         crate::value::test_mutations(
             2,
             "snowflake:v1:snapshot:01b12345-0600-1234-0000-000000000000",
         )
         .expect("test mutations")
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingIncrementalClient {
+        queries: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl SnowflakeClient for RecordingIncrementalClient {
+        fn exec(&self, _sql: &str) -> anyhow::Result<StatementOutcome> {
+            Ok(StatementOutcome {
+                query_id: "01b12345-0602-1234-0000-000000000000".to_string(),
+            })
+        }
+
+        fn query_rows(&self, sql: &str) -> anyhow::Result<RowSet> {
+            self.queries.lock().expect("queries").push(sql.to_string());
+            if sql.starts_with("DESCRIBE TABLE") {
+                return Ok(RowSet {
+                    query_id: "describe-query".to_string(),
+                    columns: Vec::new(),
+                    rows: vec![
+                        vec![
+                            "ID".to_string(),
+                            "VARCHAR".to_string(),
+                            "COLUMN".to_string(),
+                        ],
+                        vec![
+                            "NAME".to_string(),
+                            "VARCHAR".to_string(),
+                            "COLUMN".to_string(),
+                        ],
+                    ],
+                });
+            }
+
+            Ok(RowSet {
+                query_id: "changes-query".to_string(),
+                columns: vec![
+                    "METADATA$ROW_ID".to_string(),
+                    "METADATA$ACTION".to_string(),
+                    "METADATA$ISUPDATE".to_string(),
+                    "ID".to_string(),
+                    "NAME".to_string(),
+                ],
+                rows: vec![vec![
+                    "row-1".to_string(),
+                    "INSERT".to_string(),
+                    "false".to_string(),
+                    "1".to_string(),
+                    "after".to_string(),
+                ]],
+            })
+        }
     }
 }

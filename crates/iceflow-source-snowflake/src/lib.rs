@@ -22,8 +22,14 @@ pub use binding::{SnowflakeBindingRequest, SnowflakeConnectorBinding, SnowflakeT
 pub use checkpoint::{decode_checkpoint, encode_checkpoint, Checkpoint};
 pub use config::{SnowflakeAuthMethod, SnowflakeSourceConfig};
 
+const ADBC_AUTH_TYPE_ENV: &str = "ADBC_SNOWFLAKE_SQL_AUTH_TYPE";
+const ADBC_JWT_KEY_ENV_VARS: &[&str] = &[
+    "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY",
+    "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE",
+];
+#[cfg(test)]
 const EXTERNAL_ADBC_AUTH_ENV_VARS: &[&str] = &[
-    "ADBC_SNOWFLAKE_SQL_AUTH_TYPE",
+    ADBC_AUTH_TYPE_ENV,
     "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY",
     "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_VALUE",
 ];
@@ -100,6 +106,30 @@ impl SourceAdapter for SnowflakeSource {
                 binding.managed_stream_name.clone(),
             );
             details.insert("primary_keys".to_string(), metadata.primary_keys.join(","));
+            let stream_grants = metadata::validate_stream_grants(
+                self.client.as_ref(),
+                &self.config.role,
+                &self.config.database,
+                binding,
+            )
+            .map_err(source_error)?;
+            details.insert(
+                "stream_privilege_database".to_string(),
+                stream_grants.database_privilege,
+            );
+            details.insert(
+                "stream_privilege_schema".to_string(),
+                stream_grants.schema_privilege,
+            );
+            details.insert(
+                "stream_privilege_table".to_string(),
+                stream_grants.table_privilege,
+            );
+            details.insert(
+                "stream_privilege_change_tracking".to_string(),
+                "not_verified_side_effect_free".to_string(),
+            );
+            warnings.extend(stream_grants.warnings);
             warnings.push(
                 "Snowflake updates and deletes are captured, but current real sinks do not yet converge mutable row state"
                     .to_string(),
@@ -151,9 +181,9 @@ impl SourceAdapter for SnowflakeSource {
             )));
         }
 
-        let anchor = self.client.exec("SELECT 1").map_err(source_error)?;
-        self.client
-            .exec(&create_stream_at_statement_sql(binding, &anchor.query_id))
+        let anchor = self
+            .client
+            .exec(&create_stream_on_table_sql(binding))
             .map_err(source_error)?;
         let checkpoint_end = encode_checkpoint(Checkpoint::Snapshot {
             anchor_query_id: anchor.query_id.clone(),
@@ -206,9 +236,15 @@ fn needs_external_password_warning(config: &SnowflakeSourceConfig) -> bool {
 }
 
 fn has_external_adbc_auth_env() -> bool {
-    EXTERNAL_ADBC_AUTH_ENV_VARS
+    let auth_type = std::env::var(ADBC_AUTH_TYPE_ENV)
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let has_jwt_key = ADBC_JWT_KEY_ENV_VARS
         .iter()
-        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()));
+
+    auth_type == "auth_jwt" && has_jwt_key
 }
 
 fn recreate_stream_at_checkpoint(
@@ -227,7 +263,7 @@ fn recreate_stream_at_checkpoint(
 fn snapshot_query(
     binding: &SnowflakeConnectorBinding,
     metadata: &metadata::TableMetadata,
-    anchor_query_id: &str,
+    _anchor_query_id: &str,
 ) -> String {
     let select_list = metadata
         .columns
@@ -249,9 +285,9 @@ fn snapshot_query(
         .join(", ");
 
     format!(
-        "SELECT {select_list} FROM {} AT (STATEMENT => '{}') ORDER BY {}",
+        "SELECT {select_list} FROM {} AT (STREAM => '{}') ORDER BY {}",
         client::qualified_table_name(&binding.source_schema, &binding.source_table),
-        client::quote_literal_value(anchor_query_id),
+        client::quote_literal_value(&managed_stream_sql_name(binding)),
         order_by,
     )
 }
@@ -269,11 +305,23 @@ fn create_stream_at_statement_sql(binding: &SnowflakeConnectorBinding, query_id:
     )
 }
 
+fn create_stream_on_table_sql(binding: &SnowflakeConnectorBinding) -> String {
+    format!(
+        "CREATE OR REPLACE STREAM {} ON TABLE {}",
+        managed_stream_sql_name(binding),
+        client::qualified_table_name(&binding.source_schema, &binding.source_table),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::env_test_support::SavedEnv;
-    use iceflow_source::{SourceAdapter, SourceCapability};
+    use iceflow_source::{
+        BatchPoll, BatchRequest, SourceAdapter, SourceCapability, SourceTableSelection,
+    };
+    use iceflow_types::{TableId, TableMode};
+    use std::sync::{Arc, Mutex};
     use tokio::runtime::Builder;
 
     #[derive(Default)]
@@ -366,13 +414,43 @@ mod tests {
     }
 
     #[test]
-    fn unbound_check_suppresses_empty_password_warning_when_external_auth_env_is_present() {
+    fn unbound_check_warns_when_auth_type_env_is_present_without_jwt_key() {
         let _lock = env_lock().lock().expect("env lock");
         let _env = SavedEnv::capture(EXTERNAL_ADBC_AUTH_ENV_VARS);
         for name in EXTERNAL_ADBC_AUTH_ENV_VARS {
             std::env::remove_var(name);
         }
         std::env::set_var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE", "auth_jwt");
+        let source = SnowflakeSource::new(
+            sample_empty_password_config(),
+            None,
+            Box::new(FakeSnowflakeClient),
+        );
+
+        let report = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.check())
+            .expect("check");
+
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Snowflake password is empty")));
+    }
+
+    #[test]
+    fn unbound_check_suppresses_empty_password_warning_for_complete_jwt_auth_env() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _env = SavedEnv::capture(EXTERNAL_ADBC_AUTH_ENV_VARS);
+        for name in EXTERNAL_ADBC_AUTH_ENV_VARS {
+            std::env::remove_var(name);
+        }
+        std::env::set_var("ADBC_SNOWFLAKE_SQL_AUTH_TYPE", "auth_jwt");
+        std::env::set_var(
+            "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY",
+            "private-key",
+        );
         let source = SnowflakeSource::new(
             sample_empty_password_config(),
             None,
@@ -415,11 +493,261 @@ mod tests {
 
         assert!(query.contains("TO_VARCHAR(\"CUSTOMER_ID\") AS \"CUSTOMER_ID\""));
         assert!(query.contains("TO_VARCHAR(\"UPDATED_AT\") AS \"UPDATED_AT\""));
-        assert!(query.contains("AT (STATEMENT => '01b12345-0600-1234-0000-000000000000')"));
+        assert!(query.contains("AT (STREAM => '\"PUBLIC\".\"_iceflow_"));
+        assert!(!query.contains("AT (STATEMENT"));
+    }
+
+    #[test]
+    fn fresh_open_capture_anchors_snapshot_on_create_stream_query_id() {
+        let client = RecordingSnowflakeClient::default();
+        let binding = sample_binding(None);
+        let source = SnowflakeSource::new(
+            sample_config(),
+            Some(binding.clone()),
+            Box::new(client.clone()),
+        );
+
+        let mut session = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.open_capture(OpenCaptureRequest {
+                table: SourceTableSelection {
+                    table_id: TableId::from("customer_state.customer_state"),
+                    source_schema: binding.source_schema.clone(),
+                    source_table: binding.source_table.clone(),
+                    table_mode: TableMode::AppendOnly,
+                },
+                resume_from: None,
+            }))
+            .expect("open capture");
+        let poll = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(session.poll_batch(BatchRequest::default()))
+            .expect("poll");
+        let BatchPoll::Batch(batch) = poll else {
+            panic!("expected snapshot batch");
+        };
+
+        assert_eq!(
+            decode_checkpoint(&batch.checkpoint_end).expect("checkpoint"),
+            Checkpoint::Snapshot {
+                anchor_query_id: "create-stream-query".to_string(),
+            }
+        );
+
+        let execs = client.execs.lock().expect("execs");
+        assert!(
+            execs.iter().all(|sql| sql != "SELECT 1"),
+            "fresh bootstrap should not use an unrelated SELECT 1 anchor: {execs:?}"
+        );
+        assert!(
+            execs.iter().any(|sql| {
+                sql.starts_with("CREATE OR REPLACE STREAM ")
+                    && !sql.contains(" AT (STATEMENT")
+                    && sql.contains(" ON TABLE \"PUBLIC\".\"CUSTOMER_STATE\"")
+            }),
+            "fresh bootstrap should create the stream at the table current offset: {execs:?}"
+        );
+
+        let queries = client.queries.lock().expect("queries");
+        let snapshot_query = queries
+            .iter()
+            .find(|sql| sql.contains("AT (STREAM =>"))
+            .expect("snapshot query should use the managed stream anchor");
+        assert!(snapshot_query.contains(&binding.managed_stream_name));
+    }
+
+    #[test]
+    fn bound_check_validates_stream_grants_without_stream_ddl() {
+        let client = RecordingSnowflakeClient::default();
+        let source = SnowflakeSource::new(
+            sample_config(),
+            Some(sample_binding(None)),
+            Box::new(client.clone()),
+        );
+
+        let report = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.check())
+            .expect("check");
+
+        assert_eq!(
+            report.details.get("stream_privilege_database"),
+            Some(&"USAGE".to_string())
+        );
+        assert_eq!(
+            report.details.get("stream_privilege_schema"),
+            Some(&"CREATE STREAM".to_string())
+        );
+        assert_eq!(
+            report.details.get("stream_privilege_table"),
+            Some(&"SELECT".to_string())
+        );
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning
+                .contains("cannot prove Snowflake change tracking is already enabled")));
+
+        let execs = client.execs.lock().expect("execs");
+        assert!(
+            execs
+                .iter()
+                .any(|sql| sql == "SHOW GRANTS TO ROLE \"ICEFLOW_ROLE\""),
+            "check should introspect role grants: {execs:?}"
+        );
+        assert!(
+            execs
+                .iter()
+                .all(|sql| !sql.starts_with("CREATE OR REPLACE STREAM")),
+            "check must not run stream DDL: {execs:?}"
+        );
+    }
+
+    #[test]
+    fn bound_check_rejects_missing_stream_grants() {
+        let client = RecordingSnowflakeClient {
+            grant_rows: Arc::new(Mutex::new(vec![vec![
+                "USAGE".to_string(),
+                "SCHEMA".to_string(),
+                "SOURCE_DB.PUBLIC".to_string(),
+            ]])),
+            ..RecordingSnowflakeClient::default()
+        };
+        let source = SnowflakeSource::new(
+            sample_config(),
+            Some(sample_binding(None)),
+            Box::new(client),
+        );
+
+        let err = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.check())
+            .expect_err("check should reject missing stream grants");
+
+        assert!(err.to_string().contains("CREATE STREAM"));
+        assert!(err.to_string().contains("SELECT"));
     }
 
     fn env_lock() -> &'static std::sync::Mutex<()> {
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         &ENV_LOCK
+    }
+
+    fn sample_binding(
+        durable_checkpoint: Option<iceflow_types::CheckpointId>,
+    ) -> SnowflakeConnectorBinding {
+        SnowflakeConnectorBinding::from_request(SnowflakeBindingRequest {
+            connector_name: "snowflake_customer_state_append".to_string(),
+            tables: vec![SnowflakeTableBinding {
+                source_schema: "PUBLIC".to_string(),
+                source_table: "CUSTOMER_STATE".to_string(),
+                destination_namespace: "customer_state".to_string(),
+                destination_table: "customer_state".to_string(),
+                table_mode: "append_only".to_string(),
+            }],
+            durable_checkpoint,
+        })
+        .expect("binding")
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingSnowflakeClient {
+        execs: Arc<Mutex<Vec<String>>>,
+        queries: Arc<Mutex<Vec<String>>>,
+        grant_rows: Arc<Mutex<Vec<Vec<String>>>>,
+    }
+
+    impl client::SnowflakeClient for RecordingSnowflakeClient {
+        fn exec(&self, sql: &str) -> anyhow::Result<client::StatementOutcome> {
+            self.execs.lock().expect("execs").push(sql.to_string());
+            let query_id = if sql.starts_with("SHOW PRIMARY KEYS") {
+                "show-pk-query"
+            } else if sql.starts_with("SHOW GRANTS TO ROLE") {
+                "show-grants-query"
+            } else if sql.starts_with("CREATE OR REPLACE STREAM") {
+                "create-stream-query"
+            } else if sql == "SELECT 1" {
+                "select-one-query"
+            } else {
+                "exec-query"
+            };
+            Ok(client::StatementOutcome {
+                query_id: query_id.to_string(),
+            })
+        }
+
+        fn query_rows(&self, sql: &str) -> anyhow::Result<client::RowSet> {
+            self.queries.lock().expect("queries").push(sql.to_string());
+            if sql.contains("RESULT_SCAN('show-pk-query')") {
+                return Ok(client::RowSet {
+                    query_id: "pk-query".to_string(),
+                    columns: vec!["column_name".to_string()],
+                    rows: vec![vec!["CUSTOMER_ID".to_string()]],
+                });
+            }
+
+            if sql.contains("RESULT_SCAN('show-grants-query')") {
+                let rows = self.grant_rows.lock().expect("grant rows");
+                let rows = if rows.is_empty() {
+                    vec![
+                        vec![
+                            "USAGE".to_string(),
+                            "DATABASE".to_string(),
+                            "SOURCE_DB".to_string(),
+                        ],
+                        vec![
+                            "CREATE STREAM".to_string(),
+                            "SCHEMA".to_string(),
+                            "SOURCE_DB.PUBLIC".to_string(),
+                        ],
+                        vec![
+                            "SELECT".to_string(),
+                            "TABLE".to_string(),
+                            "SOURCE_DB.PUBLIC.CUSTOMER_STATE".to_string(),
+                        ],
+                    ]
+                } else {
+                    rows.clone()
+                };
+                return Ok(client::RowSet {
+                    query_id: "grants-query".to_string(),
+                    columns: vec![
+                        "privilege".to_string(),
+                        "granted_on".to_string(),
+                        "name".to_string(),
+                    ],
+                    rows,
+                });
+            }
+
+            if sql.starts_with("DESCRIBE TABLE") {
+                return Ok(client::RowSet {
+                    query_id: "describe-query".to_string(),
+                    columns: Vec::new(),
+                    rows: vec![
+                        vec![
+                            "CUSTOMER_ID".to_string(),
+                            "VARCHAR".to_string(),
+                            "COLUMN".to_string(),
+                        ],
+                        vec![
+                            "STATUS".to_string(),
+                            "VARCHAR".to_string(),
+                            "COLUMN".to_string(),
+                        ],
+                    ],
+                });
+            }
+
+            Ok(client::RowSet {
+                query_id: "snapshot-query".to_string(),
+                columns: vec!["CUSTOMER_ID".to_string(), "STATUS".to_string()],
+                rows: vec![vec!["customer-001".to_string(), "active".to_string()]],
+            })
+        }
     }
 }

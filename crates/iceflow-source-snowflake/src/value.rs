@@ -186,19 +186,11 @@ fn collapse_group(
         );
     }
     if single.is_action("DELETE") {
-        let operation = match ctx.table_mode {
-            TableMode::AppendOnly => OperationKind::Insert,
-            TableMode::KeyedUpsert => OperationKind::Delete,
-        };
-        let after = match ctx.table_mode {
-            TableMode::AppendOnly => Some(single.values.clone()),
-            TableMode::KeyedUpsert => None,
-        };
         return build_change_mutation(
             ctx,
             single,
-            operation,
-            after,
+            OperationKind::Delete,
+            None,
             Some(single.values.clone()),
             ordering_value,
         );
@@ -238,15 +230,10 @@ fn collapse_update_group(
         ));
     }
 
-    let operation = match ctx.table_mode {
-        TableMode::AppendOnly => OperationKind::Insert,
-        TableMode::KeyedUpsert => OperationKind::Upsert,
-    };
-
     build_change_mutation(
         ctx,
         insert,
-        operation,
+        OperationKind::Upsert,
         Some(insert.values.clone()),
         Some(delete.values.clone()),
         ordering_value,
@@ -472,6 +459,7 @@ pub(crate) fn test_mutations(count: usize, checkpoint: &str) -> Result<Vec<Logic
 #[cfg(test)]
 mod tests {
     use iceflow_types::IceflowJsonValue as Value;
+    use iceflow_types::Operation;
 
     fn change_row(
         row_id: &str,
@@ -519,6 +507,32 @@ mod tests {
                 .and_then(|object| object.get("name")),
             Some(&Value::String("after".to_string()))
         );
+        assert_eq!(
+            collapsed[0]
+                .before
+                .as_ref()
+                .and_then(object_field)
+                .and_then(|object| object.get("name")),
+            Some(&Value::String("before".to_string()))
+        );
+        assert_eq!(collapsed[0].op, Operation::Upsert);
+    }
+
+    #[test]
+    fn preserves_standard_stream_delete_operation_for_append_only_mutation_logs() {
+        let rows = vec![change_row(
+            "row-1",
+            "DELETE",
+            false,
+            vec![("id", "1"), ("name", "before")],
+        )];
+
+        let collapsed = super::collapse_change_rows(super::MutationContext::for_test(), rows)
+            .expect("collapse");
+
+        assert_eq!(collapsed.len(), 1);
+        assert_eq!(collapsed[0].op, Operation::Delete);
+        assert!(collapsed[0].after.is_none());
         assert_eq!(
             collapsed[0]
                 .before
