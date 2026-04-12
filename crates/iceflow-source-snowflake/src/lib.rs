@@ -190,7 +190,7 @@ impl SourceAdapter for SnowflakeSource {
         });
         let snapshot = self
             .client
-            .query_rows(&snapshot_query(binding, &metadata, &anchor.query_id))
+            .query_rows(&snapshot_query(binding, &metadata))
             .map_err(source_error)?;
         let records = value::snapshot_rows_to_mutations(
             value::MutationContext::new(
@@ -263,7 +263,6 @@ fn recreate_stream_at_checkpoint(
 fn snapshot_query(
     binding: &SnowflakeConnectorBinding,
     metadata: &metadata::TableMetadata,
-    _anchor_query_id: &str,
 ) -> String {
     let select_list = metadata
         .columns
@@ -489,7 +488,7 @@ mod tests {
             schema_fingerprint: "fingerprint-v1".to_string(),
         };
 
-        let query = snapshot_query(&binding, &metadata, "01b12345-0600-1234-0000-000000000000");
+        let query = snapshot_query(&binding, &metadata);
 
         assert!(query.contains("TO_VARCHAR(\"CUSTOMER_ID\") AS \"CUSTOMER_ID\""));
         assert!(query.contains("TO_VARCHAR(\"UPDATED_AT\") AS \"UPDATED_AT\""));

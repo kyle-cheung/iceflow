@@ -739,6 +739,19 @@ mod tests {
     }
 
     #[test]
+    fn append_only_cdc_mutation_log_materializes_non_insert_operations() {
+        let worker = DuckDbWorker::in_memory().expect("worker");
+        let output = run_ready(worker.materialize(sample_append_only_cdc_log_batch()))
+            .expect("materialized batch");
+
+        assert_eq!(output.manifest.table_mode, TableMode::AppendOnly);
+        assert_eq!(output.manifest.record_count, 3);
+        assert_eq!(output.manifest.op_counts.get(&Operation::Insert), Some(&1));
+        assert_eq!(output.manifest.op_counts.get(&Operation::Upsert), Some(&1));
+        assert_eq!(output.manifest.op_counts.get(&Operation::Delete), Some(&1));
+    }
+
+    #[test]
     fn parquet_writer_uses_content_hash_when_batch_label_is_missing() {
         let worker = DuckDbWorker::in_memory().expect("worker");
         let output =
@@ -791,6 +804,19 @@ mod tests {
                 append_insert(1, 11),
                 append_insert(2, 12),
                 append_insert(3, 13),
+            ],
+        }
+    }
+
+    fn sample_append_only_cdc_log_batch() -> SourceBatch {
+        SourceBatch {
+            batch_label: Some("fixtures/customer_state/mutation-log-0001.jsonl".to_string()),
+            checkpoint_start: Some(checkpoint("cp-11")),
+            checkpoint_end: checkpoint("cp-13"),
+            records: vec![
+                append_log_insert(1, 11),
+                append_upsert(1, 12),
+                append_delete(1, 13),
             ],
         }
     }
@@ -865,6 +891,61 @@ mod tests {
         .with_after(json!({ "order_id": order_id, "amount_cents": 100 }))
         .build()
         .expect("valid insert")
+    }
+
+    fn append_log_insert(customer_id: i64, ordering_value: i64) -> LogicalMutation {
+        LogicalMutation::insert(
+            table_id("customer_state_mutation_log"),
+            "source-a",
+            SourceClass::DatabaseCdc,
+            TableMode::AppendOnly,
+            key([("customer_id", customer_id)]),
+            ordering("snowflake_ordinal", ordering_value),
+            checkpoint(format!("cp-{ordering_value}")),
+            1,
+            sample_time(),
+            BTreeMap::new(),
+        )
+        .with_after(json!({ "customer_id": customer_id, "status": "trial" }))
+        .build()
+        .expect("valid append-only mutation-log insert")
+    }
+
+    fn append_upsert(customer_id: i64, ordering_value: i64) -> LogicalMutation {
+        LogicalMutation::upsert(
+            table_id("customer_state_mutation_log"),
+            "source-a",
+            SourceClass::DatabaseCdc,
+            TableMode::AppendOnly,
+            key([("customer_id", customer_id)]),
+            ordering("snowflake_ordinal", ordering_value),
+            checkpoint(format!("cp-{ordering_value}")),
+            1,
+            sample_time(),
+            BTreeMap::new(),
+        )
+        .with_before(json!({ "customer_id": customer_id, "status": "trial" }))
+        .with_after(json!({ "customer_id": customer_id, "status": "active" }))
+        .build()
+        .expect("valid append-only mutation-log upsert")
+    }
+
+    fn append_delete(customer_id: i64, ordering_value: i64) -> LogicalMutation {
+        LogicalMutation::delete(
+            table_id("customer_state_mutation_log"),
+            "source-a",
+            SourceClass::DatabaseCdc,
+            TableMode::AppendOnly,
+            key([("customer_id", customer_id)]),
+            ordering("snowflake_ordinal", ordering_value),
+            checkpoint(format!("cp-{ordering_value}")),
+            1,
+            sample_time(),
+            BTreeMap::new(),
+        )
+        .with_before(json!({ "customer_id": customer_id, "status": "active" }))
+        .build()
+        .expect("valid append-only mutation-log delete")
     }
 
     fn sample_time() -> chrono::DateTime<chrono::Utc> {

@@ -101,6 +101,37 @@ fn filesystem_sink_persists_append_commit_across_reloads() -> Result<()> {
 }
 
 #[test]
+fn filesystem_sink_commits_append_only_cdc_mutation_log() -> Result<()> {
+    block_on(async {
+        let root = warehouse_root("filesystem-cdc-log");
+        let sink = FilesystemSink::new(root.clone());
+        let request = support::with_destination(
+            sample_append_cdc_log_commit_request(),
+            root.join("warehouse/customer_state_mutation_log"),
+        );
+
+        let prepared = sink.prepare_commit(request.clone()).await?;
+        assert_eq!(
+            prepared.request.manifest.op_counts,
+            BTreeMap::from([
+                (Operation::Insert, 1),
+                (Operation::Upsert, 1),
+                (Operation::Delete, 1),
+            ])
+        );
+        let committed = sink.commit(prepared).await?;
+
+        let reloaded = FilesystemSink::new(root);
+        let snapshot = reloaded
+            .lookup_snapshot(&committed.snapshot)
+            .await?
+            .expect("snapshot metadata");
+        assert_eq!(snapshot.record_count, 3);
+        Ok(())
+    })
+}
+
+#[test]
 fn append_only_worker_output_commits_through_filesystem_sink() -> Result<()> {
     block_on(async {
         let source = FileSource::from_fixture_dir("fixtures/reference_workload_v0/orders_events");
@@ -340,6 +371,26 @@ fn sample_append_commit_request() -> CommitRequest {
         },
         idempotency_key: "batch-append-0001:append".into(),
     }
+}
+
+fn sample_append_cdc_log_commit_request() -> CommitRequest {
+    let mut request = sample_append_commit_request();
+    request.batch_id = BatchId::from("batch-append-cdc-0001");
+    request.manifest.batch_id = request.batch_id.clone();
+    request.manifest.table_id = TableId::from("customer_state_mutation_log");
+    request.manifest.source_class = SourceClass::DatabaseCdc;
+    request.manifest.record_count = 3;
+    request.manifest.op_counts = BTreeMap::from([
+        (Operation::Insert, 1),
+        (Operation::Upsert, 1),
+        (Operation::Delete, 1),
+    ]);
+    request.manifest.content_hash = "content-cdc-log".to_string();
+    request.manifest.file_set[0].file_uri =
+        support::sample_source_file_uri("batch-append-cdc-0001");
+    request.manifest.file_set[0].record_count = 3;
+    request.idempotency_key = "batch-append-cdc-0001:append".into();
+    request
 }
 
 fn warehouse_root(name: &str) -> std::path::PathBuf {

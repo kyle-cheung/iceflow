@@ -173,7 +173,7 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
         .map_err(|err| Error::msg(format!("source check '{}': {err}", connector.source)))?;
 
     let mut warnings = Vec::new();
-    append_source_warnings(&mut warnings, source_report.warnings.clone());
+    warnings.extend(source_report.warnings);
     let mut errors = Vec::new();
 
     let catalog_state = validate_catalog_configuration(
@@ -563,13 +563,6 @@ fn parse_table_mode(value: &str) -> Result<TableMode> {
     }
 }
 
-fn append_source_warnings(
-    warnings: &mut Vec<String>,
-    source_warnings: impl IntoIterator<Item = String>,
-) {
-    warnings.extend(source_warnings);
-}
-
 enum CatalogValidation {
     Resolved(String),
     Unresolved,
@@ -714,27 +707,5 @@ mod tests {
             PathBuf::from("/tmp/config/.iceflow/state/snowflake_customer_state_append.sqlite3")
         );
         Ok(())
-    }
-
-    #[test]
-    fn source_warnings_are_preserved_in_connector_check_report() {
-        let mut warnings = vec!["destination warning".to_string()];
-
-        append_source_warnings(
-            &mut warnings,
-            vec![
-                "Snowflake updates and deletes are captured, but current real sinks do not yet converge mutable row state"
-                    .to_string(),
-            ],
-        );
-
-        assert_eq!(
-            warnings,
-            vec![
-                "destination warning".to_string(),
-                "Snowflake updates and deletes are captured, but current real sinks do not yet converge mutable row state"
-                    .to_string(),
-            ]
-        );
     }
 }

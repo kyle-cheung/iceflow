@@ -40,10 +40,15 @@ impl MutationContext {
 
     #[cfg(test)]
     fn for_test() -> Self {
+        Self::for_test_mode(TableMode::AppendOnly)
+    }
+
+    #[cfg(test)]
+    fn for_test_mode(table_mode: TableMode) -> Self {
         Self {
             table_id: TableId::from("customer_state.customer_state"),
             source_id: "snowflake.config.local_snowflake".to_string(),
-            table_mode: TableMode::AppendOnly,
+            table_mode,
             primary_keys: vec!["id".to_string()],
             checkpoint: CheckpointId::from(
                 "snowflake:v1:stream:01b12345-0602-1234-0000-000000000000",
@@ -516,6 +521,50 @@ mod tests {
             Some(&Value::String("before".to_string()))
         );
         assert_eq!(collapsed[0].op, Operation::Upsert);
+    }
+
+    #[test]
+    fn collapses_standard_stream_update_pair_for_keyed_upsert_mode() {
+        let rows = vec![
+            change_row(
+                "row-1",
+                "DELETE",
+                true,
+                vec![("id", "1"), ("name", "before")],
+            ),
+            change_row(
+                "row-1",
+                "INSERT",
+                true,
+                vec![("id", "1"), ("name", "after")],
+            ),
+        ];
+        let ctx = super::MutationContext::for_test_mode(iceflow_types::TableMode::KeyedUpsert);
+
+        let collapsed = super::collapse_change_rows(ctx, rows).expect("collapse");
+
+        assert_eq!(collapsed.len(), 1);
+        assert_eq!(
+            collapsed[0].table_mode,
+            iceflow_types::TableMode::KeyedUpsert
+        );
+        assert_eq!(collapsed[0].op, Operation::Upsert);
+        assert_eq!(
+            collapsed[0]
+                .after
+                .as_ref()
+                .and_then(object_field)
+                .and_then(|object| object.get("name")),
+            Some(&Value::String("after".to_string()))
+        );
+        assert_eq!(
+            collapsed[0]
+                .before
+                .as_ref()
+                .and_then(object_field)
+                .and_then(|object| object.get("name")),
+            Some(&Value::String("before".to_string()))
+        );
     }
 
     #[test]
