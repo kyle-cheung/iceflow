@@ -170,9 +170,12 @@ impl SourceAdapter for SnowflakeSource {
             let decoded = decode_checkpoint(&checkpoint).map_err(source_error)?;
             // Snapshot resume reuses the existing managed stream at the original anchor; if it
             // was dropped or replaced, operators must rebootstrap to recreate the stream.
-            if matches!(decoded, Checkpoint::Stream { .. }) {
-                recreate_stream_at_checkpoint(self.client.as_ref(), binding, &decoded)
-                    .map_err(source_error)?;
+            match &decoded {
+                Checkpoint::Stream { .. } => {
+                    recreate_stream_at_checkpoint(self.client.as_ref(), binding, &decoded)
+                        .map_err(source_error)?;
+                }
+                Checkpoint::Snapshot { .. } => {}
             }
             return Ok(Box::new(session::SnowflakeCaptureSession::new_incremental(
                 self.source_id().to_string(),
