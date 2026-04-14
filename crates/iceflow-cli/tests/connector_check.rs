@@ -36,7 +36,7 @@ fn connector_check_live_snowflake_connector() -> Result<()> {
     let report = iceflow_cli::commands::connector_cmd::check_blocking(
         iceflow_cli::commands::connector_cmd::CheckArgs {
             connector_config: harness.connector_config(),
-            config_root: config_root.clone(),
+            config_root,
         },
     )?;
 
