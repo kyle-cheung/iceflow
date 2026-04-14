@@ -30,6 +30,7 @@ const SNOWFLAKE_SAMPLE_ENV_VARS: &[(&str, &str)] = &[
     ("SNOWFLAKE_DATABASE", "snowflake-database"),
 ];
 
+#[must_use]
 struct SnowflakeSampleEnvGuard {
     _lock: MutexGuard<'static, ()>,
     prior_values: Vec<(&'static str, Option<OsString>)>,
@@ -56,7 +57,7 @@ impl SnowflakeSampleEnvGuard {
 
 impl Drop for SnowflakeSampleEnvGuard {
     fn drop(&mut self) {
-        for (name, value) in self.prior_values.drain(..) {
+        for (name, value) in std::mem::take(&mut self.prior_values) {
             match value {
                 Some(value) => std::env::set_var(name, value),
                 None => std::env::remove_var(name),
@@ -65,6 +66,9 @@ impl Drop for SnowflakeSampleEnvGuard {
     }
 }
 
+// This lock is intentionally independent because this helper lives in a
+// different test binary than the shared live-env helper; a shared
+// test-support crate would be the right consolidation point later.
 fn sample_env_lock() -> &'static Mutex<()> {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
     &ENV_LOCK
