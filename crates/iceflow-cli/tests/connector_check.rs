@@ -1,7 +1,13 @@
+mod support;
+
 use anyhow::{Error, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use support::snowflake_live::LiveSnowflakeHarness;
+
+const SNOWFLAKE_MUTABLE_SINK_WARNING_FRAGMENT: &str = "Snowflake updates and deletes";
 
 #[test]
 fn connector_check_validates_file_source_connector() -> Result<()> {
@@ -15,6 +21,56 @@ fn connector_check_validates_file_source_connector() -> Result<()> {
     assert!(report.valid);
     assert!(report.errors.is_empty());
     assert_eq!(report.table_count, 1);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires live Snowflake credentials"]
+fn connector_check_live_snowflake_connector() -> Result<()> {
+    let harness = LiveSnowflakeHarness::new()?;
+    let config_root = harness.config_root();
+    let state_dir = config_root.join(".iceflow").join("state");
+
+    harness.reset_table()?; // Reset Snowflake table state before running the live check.
+
+    let report = iceflow_cli::commands::connector_cmd::check_blocking(
+        iceflow_cli::commands::connector_cmd::CheckArgs {
+            connector_config: harness.connector_config(),
+            config_root: config_root.clone(),
+        },
+    )?;
+
+    assert!(
+        report.valid,
+        "expected valid Snowflake connector check, got errors={:?}, warnings={:?}",
+        report.errors, report.warnings
+    );
+    assert!(
+        report.errors.is_empty(),
+        "unexpected errors from Snowflake connector check: {:?}",
+        report.errors
+    );
+    assert_eq!(
+        report.table_count, 1,
+        "expected exactly one table in check report, got {:?}",
+        report
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains(SNOWFLAKE_MUTABLE_SINK_WARNING_FRAGMENT)),
+        "expected Snowflake mutable-sink warning in {:?}",
+        report.warnings
+    );
+    let state_exists = state_dir
+        .try_exists()
+        .map_err(|err| Error::msg(format!("failed to stat {}: {err}", state_dir.display())))?;
+    assert!(
+        !state_exists,
+        "connector check should not create state directory, found {:?}",
+        state_dir
+    );
     Ok(())
 }
 
