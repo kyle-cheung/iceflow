@@ -16,10 +16,12 @@
 
 ## Capture Notes
 
-- Fresh bootstrap uses a lightweight statement anchor, creates the managed stream at that statement, and reads the snapshot with `AT (STATEMENT => ...)`.
+- Fresh bootstrap recreates the managed stream and snapshots with `AT (STREAM => ...)`, so the managed stream anchor is driven by the bootstrap statement itself.
+- The first incremental after that snapshot begins from the managed stream anchor and is bounded by the durable statement boundary that produced the snapshot, while later incrementals move statement-to-statement.
 - Incremental capture reads `CHANGES(INFORMATION => DEFAULT)` between durable statement checkpoints.
 - The source emits append-only mutation-log records in this repo version. Snowflake update/delete metadata is preserved, but current real sinks do not yet converge mutable row state.
 - ADBC row results are projected through `TO_VARCHAR(...)` in Snowflake SQL before entering the v1 row-oriented `RowSet` boundary.
+- Auth behavior intentionally tolerates externally injected ADBC/JWT environment credentials in addition to password-configured auth; explicit key-pair/JWT config mode remains future work.
 
 ## Tests To Run
 

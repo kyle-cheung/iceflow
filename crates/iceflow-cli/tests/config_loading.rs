@@ -10,14 +10,64 @@ use iceflow_source::{
 };
 use iceflow_types::{TableId, TableMode};
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 fn fixtures() -> &'static Path {
     Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../fixtures/config_samples"
     ))
+}
+
+const SNOWFLAKE_SAMPLE_ENV_VARS: &[(&str, &str)] = &[
+    ("SNOWFLAKE_ACCOUNT", "snowflake-account"),
+    ("SNOWFLAKE_USER", "snowflake-user"),
+    ("SNOWFLAKE_WAREHOUSE", "snowflake-warehouse"),
+    ("SNOWFLAKE_ROLE", "snowflake-role"),
+    ("SNOWFLAKE_DATABASE", "snowflake-database"),
+];
+
+struct SnowflakeSampleEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    prior_values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl SnowflakeSampleEnvGuard {
+    fn install() -> Self {
+        let lock = sample_env_lock().lock().expect("env lock");
+        let prior_values = SNOWFLAKE_SAMPLE_ENV_VARS
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
+            .collect();
+
+        for (name, value) in SNOWFLAKE_SAMPLE_ENV_VARS {
+            std::env::set_var(name, value);
+        }
+
+        Self {
+            _lock: lock,
+            prior_values,
+        }
+    }
+}
+
+impl Drop for SnowflakeSampleEnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in self.prior_values.drain(..) {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+fn sample_env_lock() -> &'static Mutex<()> {
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    &ENV_LOCK
 }
 
 fn next_temp_config_path(name: &str) -> PathBuf {
@@ -104,6 +154,41 @@ fn load_source_config_parses_file_source() -> Result<()> {
 }
 
 #[test]
+fn load_source_config_parses_local_snowflake_sample() -> Result<()> {
+    let _env_guard = SnowflakeSampleEnvGuard::install();
+
+    let config = load_source_config(&fixtures().join("sources/local_snowflake.toml"))?;
+
+    assert_eq!(config.kind, "snowflake");
+    assert_eq!(
+        config.properties.get("account").map(String::as_str),
+        Some("snowflake-account")
+    );
+    assert_eq!(
+        config.properties.get("user").map(String::as_str),
+        Some("snowflake-user")
+    );
+    assert_eq!(
+        config.properties.get("warehouse").map(String::as_str),
+        Some("snowflake-warehouse")
+    );
+    assert_eq!(
+        config.properties.get("role").map(String::as_str),
+        Some("snowflake-role")
+    );
+    assert_eq!(
+        config.properties.get("database").map(String::as_str),
+        Some("snowflake-database")
+    );
+    assert_eq!(
+        config.properties.get("auth_method").map(String::as_str),
+        Some("password")
+    );
+
+    Ok(())
+}
+
+#[test]
 fn load_connector_config_parses_orders_append() -> Result<()> {
     let config = load_connector_config(&fixtures().join("connectors/orders_append.toml"))?;
 
@@ -112,6 +197,25 @@ fn load_connector_config_parses_orders_append() -> Result<()> {
     assert_eq!(config.tables.len(), 1);
     assert_eq!(config.tables[0].source_table, "orders_events");
     assert_eq!(config.tables[0].table_mode, "append_only");
+    Ok(())
+}
+
+#[test]
+fn load_connector_config_parses_snowflake_customer_state_append() -> Result<()> {
+    let config =
+        load_connector_config(&fixtures().join("connectors/snowflake_customer_state_append.toml"))?;
+
+    assert_eq!(config.source, "local_snowflake");
+    assert_eq!(config.destination, "local_fs");
+    assert_eq!(config.tables.len(), 1);
+
+    let table = &config.tables[0];
+    assert_eq!(table.source_schema, "PUBLIC");
+    assert_eq!(table.source_table, "CUSTOMER_STATE");
+    assert_eq!(table.destination_namespace, "customer_state");
+    assert_eq!(table.destination_table, "customer_state");
+    assert_eq!(table.table_mode, "append_only");
+
     Ok(())
 }
 
