@@ -14,6 +14,7 @@ const ADBC_AUTH_ENV_VARS: &[&str] = &[
     "ADBC_SNOWFLAKE_SQL_CLIENT_OPTION_JWT_PRIVATE_KEY_PKCS8_PASSWORD",
 ];
 
+#[allow(dead_code)] // Shared live harness helpers compile in source_check.rs where this helper is unused.
 pub fn quote_string_literal(value: &str) -> String {
     value.replace('\'', "''")
 }
