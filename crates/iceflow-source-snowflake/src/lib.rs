@@ -168,8 +168,12 @@ impl SourceAdapter for SnowflakeSource {
             .or_else(|| binding.durable_checkpoint.clone());
         if let Some(checkpoint) = resume_from {
             let decoded = decode_checkpoint(&checkpoint).map_err(source_error)?;
-            recreate_stream_at_checkpoint(self.client.as_ref(), binding, &decoded)
-                .map_err(source_error)?;
+            // Snapshot resume reuses the existing managed stream at the original anchor; if it
+            // was dropped or replaced, operators must rebootstrap to recreate the stream.
+            if matches!(decoded, Checkpoint::Stream { .. }) {
+                recreate_stream_at_checkpoint(self.client.as_ref(), binding, &decoded)
+                    .map_err(source_error)?;
+            }
             return Ok(Box::new(session::SnowflakeCaptureSession::new_incremental(
                 self.source_id().to_string(),
                 req.table.table_id,
@@ -555,6 +559,116 @@ mod tests {
             .find(|sql| sql.contains("AT (STREAM =>"))
             .expect("snapshot query should use the managed stream anchor");
         assert!(snapshot_query.contains(&binding.managed_stream_name));
+    }
+
+    #[test]
+    fn resume_from_snapshot_does_not_recreate_stream() {
+        let client = RecordingSnowflakeClient::default();
+        let binding = sample_binding(None);
+        let source = SnowflakeSource::new(
+            sample_config(),
+            Some(binding.clone()),
+            Box::new(client.clone()),
+        );
+        let resume_from = encode_checkpoint(Checkpoint::Snapshot {
+            anchor_query_id: "snapshot-anchor-query".to_string(),
+        });
+
+        Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.open_capture(OpenCaptureRequest {
+                table: SourceTableSelection {
+                    table_id: TableId::from("customer_state.customer_state"),
+                    source_schema: binding.source_schema.clone(),
+                    source_table: binding.source_table.clone(),
+                    table_mode: TableMode::AppendOnly,
+                },
+                resume_from: Some(resume_from),
+            }))
+            .expect("open capture");
+
+        let execs = client.execs.lock().expect("execs");
+        assert!(
+            execs
+                .iter()
+                .all(|sql| !sql.starts_with("CREATE OR REPLACE STREAM")),
+            "resume from snapshot should not recreate the stream: {execs:?}"
+        );
+    }
+
+    #[test]
+    fn resume_from_stream_recreates_stream_at_statement_boundary() {
+        let client = RecordingSnowflakeClient::default();
+        let binding = sample_binding(None);
+        let source = SnowflakeSource::new(
+            sample_config(),
+            Some(binding.clone()),
+            Box::new(client.clone()),
+        );
+        let resume_from = encode_checkpoint(Checkpoint::Stream {
+            boundary_query_id: "stream-boundary-query".to_string(),
+        });
+
+        Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.open_capture(OpenCaptureRequest {
+                table: SourceTableSelection {
+                    table_id: TableId::from("customer_state.customer_state"),
+                    source_schema: binding.source_schema.clone(),
+                    source_table: binding.source_table.clone(),
+                    table_mode: TableMode::AppendOnly,
+                },
+                resume_from: Some(resume_from),
+            }))
+            .expect("open capture");
+
+        let execs = client.execs.lock().expect("execs");
+        assert!(
+            execs.iter().any(|sql| {
+                sql.starts_with("CREATE OR REPLACE STREAM")
+                    && sql.contains("AT (STATEMENT")
+                    && sql.contains("stream-boundary-query")
+            }),
+            "stream resume should recreate stream at statement boundary: {execs:?}"
+        );
+    }
+
+    #[test]
+    fn durable_snapshot_checkpoint_does_not_recreate_stream() {
+        let client = RecordingSnowflakeClient::default();
+        let durable_checkpoint = encode_checkpoint(Checkpoint::Snapshot {
+            anchor_query_id: "durable-snapshot-anchor".to_string(),
+        });
+        let binding = sample_binding(Some(durable_checkpoint));
+        let source = SnowflakeSource::new(
+            sample_config(),
+            Some(binding.clone()),
+            Box::new(client.clone()),
+        );
+
+        Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.open_capture(OpenCaptureRequest {
+                table: SourceTableSelection {
+                    table_id: TableId::from("customer_state.customer_state"),
+                    source_schema: binding.source_schema.clone(),
+                    source_table: binding.source_table.clone(),
+                    table_mode: TableMode::AppendOnly,
+                },
+                resume_from: None,
+            }))
+            .expect("open capture");
+
+        let execs = client.execs.lock().expect("execs");
+        assert!(
+            execs
+                .iter()
+                .all(|sql| !sql.starts_with("CREATE OR REPLACE STREAM")),
+            "durable snapshot resume should not recreate the stream: {execs:?}"
+        );
     }
 
     #[test]
