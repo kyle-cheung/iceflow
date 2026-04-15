@@ -11,12 +11,12 @@ use iceflow_source_snowflake::{
     SnowflakeSourceConfig, SnowflakeTableBinding,
 };
 use iceflow_types::{IceflowJsonValue, LogicalMutation, TableId, TableMode};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 use support::live_env::{
     apply_live_auth_env_overrides, load_repo_dotenv, optional_env, quote_string_literal,
     required_env, LiveAuthEnvGuard,
 };
-use tokio::runtime::Builder;
+use tokio::runtime::{Builder, Runtime};
 
 const LIVE_CAPTURE_TABLE: &str = "ICEFLOW_TEST_SOURCE_CUSTOMER_STATE";
 
@@ -31,9 +31,8 @@ fn live_capture_reads_snapshot_then_change_batches() -> Result<()> {
     let snapshot = harness.expect_batch(&mut session)?;
     assert!(!snapshot.records.is_empty());
 
-    Builder::new_current_thread()
-        .build()
-        .expect("runtime")
+    harness
+        .runtime()
         .block_on(session.checkpoint(harness.ack_for(&snapshot)))?;
 
     harness.insert_customer("customer-003", "trial")?;
@@ -53,9 +52,8 @@ fn live_capture_resumes_from_snapshot_checkpoint() -> Result<()> {
     let snapshot = harness.expect_batch(&mut session)?;
     assert!(!snapshot.records.is_empty());
 
-    Builder::new_current_thread()
-        .build()
-        .expect("runtime")
+    harness
+        .runtime()
         .block_on(session.checkpoint(harness.ack_for(&snapshot)))?;
 
     drop(session);
@@ -83,9 +81,8 @@ fn live_capture_resumes_from_stream_checkpoint() -> Result<()> {
     let snapshot = harness.expect_batch(&mut session)?;
     assert!(!snapshot.records.is_empty());
 
-    Builder::new_current_thread()
-        .build()
-        .expect("runtime")
+    harness
+        .runtime()
         .block_on(session.checkpoint(harness.ack_for(&snapshot)))?;
 
     harness.insert_customer("customer-003", "trial")?;
@@ -93,9 +90,8 @@ fn live_capture_resumes_from_stream_checkpoint() -> Result<()> {
     assert_batch_ids(&stream_batch, &["customer-003"]);
     let stream_checkpoint = stream_batch.checkpoint_end.clone();
 
-    Builder::new_current_thread()
-        .build()
-        .expect("runtime")
+    harness
+        .runtime()
         .block_on(session.checkpoint(harness.ack_for(&stream_batch)))?;
 
     drop(session);
@@ -109,11 +105,9 @@ fn live_capture_resumes_from_stream_checkpoint() -> Result<()> {
         "resumed stream batch did not start from the stream checkpoint"
     );
     assert_batch_ids(&resumed_batch, &["customer-004"]);
-    let runtime = Builder::new_current_thread().build().expect("runtime");
-    runtime
-        .block_on(resumed.checkpoint(harness.ack_for(&resumed_batch)))
-        .map_err(|err| Error::msg(err.to_string()))?;
-    assert_no_more_batches(&mut resumed, &runtime)?;
+    let runtime = harness.runtime();
+    runtime.block_on(resumed.checkpoint(harness.ack_for(&resumed_batch)))?;
+    assert_no_more_batches(&mut resumed, runtime)?;
     Ok(())
 }
 
@@ -121,12 +115,15 @@ struct LiveSnowflakeHarness {
     _auth_env: LiveAuthEnvGuard,
     config: SnowflakeSourceConfig,
     schema: String,
+    runtime: Runtime,
 }
 
 impl LiveSnowflakeHarness {
     fn new() -> Result<Self> {
         load_repo_dotenv()?;
         let auth_env = apply_live_auth_env_overrides();
+
+        let runtime = Builder::new_current_thread().build().expect("runtime");
 
         Ok(Self {
             _auth_env: auth_env,
@@ -141,7 +138,12 @@ impl LiveSnowflakeHarness {
                 auth_method: SnowflakeAuthMethod::Password,
             },
             schema: optional_env("SNOWFLAKE_SCHEMA").unwrap_or_else(|| "PUBLIC".to_string()),
+            runtime,
         })
+    }
+
+    fn runtime(&self) -> &Runtime {
+        &self.runtime
     }
 
     fn client(&self) -> Result<AdbcSnowflakeClient> {
@@ -187,9 +189,9 @@ impl LiveSnowflakeHarness {
             Box::new(self.client()?),
         );
 
-        Builder::new_current_thread()
-            .build()
-            .expect("runtime")
+        // `?` converts `iceflow_source`'s error type into this test crate's `anyhow::Error`.
+        Ok(self
+            .runtime
             .block_on(source.open_capture(OpenCaptureRequest {
                 table: SourceTableSelection {
                     table_id: TableId::from("customer_state.customer_state"),
@@ -198,8 +200,7 @@ impl LiveSnowflakeHarness {
                     table_mode: TableMode::AppendOnly,
                 },
                 resume_from,
-            }))
-            .map_err(|err| Error::msg(err.to_string()))
+            }))?)
     }
 
     fn binding(
@@ -223,12 +224,10 @@ impl LiveSnowflakeHarness {
         &self,
         session: &mut Box<dyn SourceCaptureSession + Send>,
     ) -> Result<SourceBatch> {
-        let runtime = Builder::new_current_thread().build().expect("runtime");
-
         for _ in 0..20 {
-            match runtime
-                .block_on(session.poll_batch(BatchRequest::default()))
-                .map_err(|err| Error::msg(err.to_string()))?
+            match self
+                .runtime
+                .block_on(session.poll_batch(BatchRequest::default()))?
             {
                 BatchPoll::Batch(batch) => return Ok(batch),
                 BatchPoll::Idle => std::thread::sleep(std::time::Duration::from_millis(250)),
@@ -289,15 +288,12 @@ fn assert_batch_ids(batch: &SourceBatch, expected_ids: &[&str]) {
 
 fn assert_no_more_batches(
     session: &mut Box<dyn SourceCaptureSession + Send>,
-    runtime: &tokio::runtime::Runtime,
+    runtime: &Runtime,
 ) -> Result<()> {
     // This helper polls a bounded number of times because the live session is non-async
     // and we need to ensure there is no delayed replay without hanging forever.
     for _ in 0..20 {
-        match runtime
-            .block_on(session.poll_batch(BatchRequest::default()))
-            .map_err(|err| Error::msg(err.to_string()))?
-        {
+        match runtime.block_on(session.poll_batch(BatchRequest::default()))? {
             BatchPoll::Idle => std::thread::sleep(std::time::Duration::from_millis(250)),
             BatchPoll::Exhausted => return Ok(()),
             BatchPoll::Batch(batch) => {
@@ -310,13 +306,17 @@ fn assert_no_more_batches(
         }
     }
 
+    // Snowflake incremental sessions stay open and report `Idle` when they are caught up rather
+    // than naturally transitioning to `Exhausted`. Clearing this bounded idle window (~5s across
+    // 20 polls) without another batch is the strongest no-replay signal this live test can assert
+    // without hanging.
     Ok(())
 }
 
 fn live_capture_lock() -> MutexGuard<'static, ()> {
-    static LIVE_CAPTURE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static LIVE_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+    // This mutex only serializes the live capture tests within this binary.
     LIVE_CAPTURE_LOCK
-        .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("failed to lock live capture mutex")
 }
