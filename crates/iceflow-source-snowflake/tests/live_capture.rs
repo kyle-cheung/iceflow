@@ -10,7 +10,8 @@ use iceflow_source_snowflake::{
     SnowflakeAuthMethod, SnowflakeBindingRequest, SnowflakeConnectorBinding, SnowflakeSource,
     SnowflakeSourceConfig, SnowflakeTableBinding,
 };
-use iceflow_types::{TableId, TableMode};
+use iceflow_types::{IceflowJsonValue, LogicalMutation, TableId, TableMode};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use support::live_env::{
     apply_live_auth_env_overrides, load_repo_dotenv, optional_env, quote_string_literal,
     required_env, LiveAuthEnvGuard,
@@ -22,6 +23,7 @@ const LIVE_CAPTURE_TABLE: &str = "ICEFLOW_TEST_SOURCE_CUSTOMER_STATE";
 #[test]
 #[ignore = "requires live Snowflake credentials"]
 fn live_capture_reads_snapshot_then_change_batches() -> Result<()> {
+    let _guard = live_capture_lock();
     let harness = LiveSnowflakeHarness::new()?;
     harness.reset_customer_state()?;
 
@@ -37,6 +39,81 @@ fn live_capture_reads_snapshot_then_change_batches() -> Result<()> {
     harness.insert_customer("customer-003", "trial")?;
     let changes = harness.expect_batch(&mut session)?;
     assert!(changes.records.iter().any(|record| record.after.is_some()));
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires live Snowflake credentials"]
+fn live_capture_resumes_from_snapshot_checkpoint() -> Result<()> {
+    let _guard = live_capture_lock();
+    let harness = LiveSnowflakeHarness::new()?;
+    harness.reset_customer_state()?;
+
+    let mut session = harness.open_bound_session(None)?;
+    let snapshot = harness.expect_batch(&mut session)?;
+    assert!(!snapshot.records.is_empty());
+
+    Builder::new_current_thread()
+        .build()
+        .expect("runtime")
+        .block_on(session.checkpoint(harness.ack_for(&snapshot)))?;
+
+    drop(session);
+    harness.insert_customer("customer-003", "trial")?;
+
+    let mut resumed = harness.open_bound_session(Some(snapshot.checkpoint_end.clone()))?;
+    let resumed_batch = harness.expect_batch(&mut resumed)?;
+    assert_eq!(
+        resumed_batch.checkpoint_start.as_ref(),
+        Some(&snapshot.checkpoint_end),
+        "resumed snapshot batch did not start from the snapshot checkpoint"
+    );
+    assert_batch_ids(&resumed_batch, &["customer-003"]);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires live Snowflake credentials"]
+fn live_capture_resumes_from_stream_checkpoint() -> Result<()> {
+    let _guard = live_capture_lock();
+    let harness = LiveSnowflakeHarness::new()?;
+    harness.reset_customer_state()?;
+
+    let mut session = harness.open_bound_session(None)?;
+    let snapshot = harness.expect_batch(&mut session)?;
+    assert!(!snapshot.records.is_empty());
+
+    Builder::new_current_thread()
+        .build()
+        .expect("runtime")
+        .block_on(session.checkpoint(harness.ack_for(&snapshot)))?;
+
+    harness.insert_customer("customer-003", "trial")?;
+    let stream_batch = harness.expect_batch(&mut session)?;
+    assert_batch_ids(&stream_batch, &["customer-003"]);
+    let stream_checkpoint = stream_batch.checkpoint_end.clone();
+
+    Builder::new_current_thread()
+        .build()
+        .expect("runtime")
+        .block_on(session.checkpoint(harness.ack_for(&stream_batch)))?;
+
+    drop(session);
+    harness.insert_customer("customer-004", "trial")?;
+
+    let mut resumed = harness.open_bound_session(Some(stream_checkpoint.clone()))?;
+    let resumed_batch = harness.expect_batch(&mut resumed)?;
+    assert_eq!(
+        resumed_batch.checkpoint_start.as_ref(),
+        Some(&stream_checkpoint),
+        "resumed stream batch did not start from the stream checkpoint"
+    );
+    assert_batch_ids(&resumed_batch, &["customer-004"]);
+    let runtime = Builder::new_current_thread().build().expect("runtime");
+    runtime
+        .block_on(resumed.checkpoint(harness.ack_for(&resumed_batch)))
+        .map_err(|err| Error::msg(err.to_string()))?;
+    assert_no_more_batches(&mut resumed, &runtime)?;
     Ok(())
 }
 
@@ -175,4 +252,71 @@ impl LiveSnowflakeHarness {
             snapshot_uri: "file:///tmp/live-snowflake".to_string(),
         }
     }
+}
+
+fn collect_customer_ids(batch: &SourceBatch) -> Vec<String> {
+    batch
+        .records
+        .iter()
+        .filter_map(record_customer_id)
+        .collect()
+}
+
+fn record_customer_id(record: &LogicalMutation) -> Option<String> {
+    record
+        .key
+        .parts
+        .iter()
+        .find(|part| part.name.eq_ignore_ascii_case("customer_id"))
+        .and_then(|part| match &part.value {
+            IceflowJsonValue::String(value) => Some(value.clone()),
+            _ => None,
+        })
+}
+
+fn assert_batch_ids(batch: &SourceBatch, expected_ids: &[&str]) {
+    let mut ids = collect_customer_ids(batch);
+    assert_eq!(
+        ids.len(),
+        batch.records.len(),
+        "some records were missing customer_id keys"
+    );
+    ids.sort();
+    let mut expected: Vec<String> = expected_ids.iter().map(|id| id.to_string()).collect();
+    expected.sort();
+    assert_eq!(ids, expected, "batch customer IDs do not match expected")
+}
+
+fn assert_no_more_batches(
+    session: &mut Box<dyn SourceCaptureSession + Send>,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<()> {
+    // This helper polls a bounded number of times because the live session is non-async
+    // and we need to ensure there is no delayed replay without hanging forever.
+    for _ in 0..20 {
+        match runtime
+            .block_on(session.poll_batch(BatchRequest::default()))
+            .map_err(|err| Error::msg(err.to_string()))?
+        {
+            BatchPoll::Idle => std::thread::sleep(std::time::Duration::from_millis(250)),
+            BatchPoll::Exhausted => return Ok(()),
+            BatchPoll::Batch(batch) => {
+                let ids = collect_customer_ids(&batch).join(",");
+                return Err(Error::msg(format!(
+                    "unexpected batch after resumed checkpoint (checkpoint={} ids=[{}])",
+                    batch.checkpoint_end, ids,
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn live_capture_lock() -> MutexGuard<'static, ()> {
+    static LIVE_CAPTURE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LIVE_CAPTURE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("failed to lock live capture mutex")
 }
