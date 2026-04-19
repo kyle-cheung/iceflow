@@ -353,7 +353,7 @@ impl SnowflakeClient for TestSnowflakeClient {
 mod tests {
     use crate::checkpoint::{decode_checkpoint, Checkpoint};
     use crate::client::{RowSet, SnowflakeClient, StatementOutcome};
-    use iceflow_source::{BatchPoll, BatchRequest, SourceCaptureSession};
+    use iceflow_source::{BatchPoll, BatchRequest, CheckpointAck, SourceCaptureSession};
     use std::sync::{Arc, Mutex};
     use tokio::runtime::Builder;
 
@@ -419,6 +419,86 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_ack_rejects_wrong_source_id_without_mutating_session() {
+        let mut session = super::SnowflakeCaptureSession::new_from_snapshot(fake_snapshot_rows());
+        let phase_before = session.phase.clone();
+        let pending_before = session.pending.clone();
+        let mut ack = valid_checkpoint_ack(&session);
+        ack.source_id = "snowflake.config.other".to_string();
+
+        let err = session
+            .checkpoint_inner(ack)
+            .expect_err("wrong source_id should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "checkpoint ack source_id does not match source"
+        );
+        assert_eq!(session.phase, phase_before);
+        assert_eq!(session.pending, pending_before);
+    }
+
+    #[test]
+    fn checkpoint_ack_rejects_empty_snapshot_uri_without_mutating_session() {
+        let mut session = super::SnowflakeCaptureSession::new_from_snapshot(fake_snapshot_rows());
+        let phase_before = session.phase.clone();
+        let pending_before = session.pending.clone();
+        let mut ack = valid_checkpoint_ack(&session);
+        ack.snapshot_uri = "   ".to_string();
+
+        let err = session
+            .checkpoint_inner(ack)
+            .expect_err("empty snapshot_uri should fail");
+
+        assert_eq!(err.to_string(), "checkpoint ack snapshot uri is required");
+        assert_eq!(session.phase, phase_before);
+        assert_eq!(session.pending, pending_before);
+    }
+
+    #[test]
+    fn checkpoint_ack_rejects_mismatched_checkpoint_without_mutating_session() {
+        let mut session = super::SnowflakeCaptureSession::new_from_snapshot(fake_snapshot_rows());
+        let phase_before = session.phase.clone();
+        let pending_before = session.pending.clone();
+        let mut ack = valid_checkpoint_ack(&session);
+        ack.checkpoint = iceflow_types::CheckpointId::from(
+            "snowflake:v1:snapshot:01b12345-0600-1234-0000-999999999999",
+        );
+
+        let err = session
+            .checkpoint_inner(ack)
+            .expect_err("mismatched checkpoint should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "checkpoint ack does not match pending batch"
+        );
+        assert_eq!(session.phase, phase_before);
+        assert_eq!(session.pending, pending_before);
+    }
+
+    #[test]
+    fn checkpoint_ack_requires_a_pending_batch() {
+        let checkpoint = iceflow_types::CheckpointId::from(
+            "snowflake:v1:stream:01b12345-0601-1234-0000-000000000000",
+        );
+        let mut session = super::SnowflakeCaptureSession::new_for_resume_test(checkpoint.clone());
+        let phase_before = session.phase.clone();
+
+        let err = session
+            .checkpoint_inner(CheckpointAck {
+                source_id: "snowflake.config.local_snowflake".to_string(),
+                checkpoint,
+                snapshot_uri: "file:///tmp/session-checkpoint".to_string(),
+            })
+            .expect_err("checkpoint without pending batch should fail");
+
+        assert_eq!(err.to_string(), "no pending Snowflake batch to checkpoint");
+        assert_eq!(session.phase, phase_before);
+        assert!(session.pending.is_none());
+    }
+
+    #[test]
     fn changes_query_casts_metadata_and_data_columns_to_varchar() {
         let binding = super::test_binding(None);
         let metadata = super::test_metadata();
@@ -478,6 +558,23 @@ mod tests {
             "snowflake:v1:snapshot:01b12345-0600-1234-0000-000000000000",
         )
         .expect("test mutations")
+    }
+
+    fn valid_checkpoint_ack(session: &super::SnowflakeCaptureSession) -> CheckpointAck {
+        CheckpointAck {
+            source_id: session.source_id.clone(),
+            checkpoint: pending_checkpoint(session),
+            snapshot_uri: "file:///tmp/session-checkpoint".to_string(),
+        }
+    }
+
+    fn pending_checkpoint(session: &super::SnowflakeCaptureSession) -> iceflow_types::CheckpointId {
+        session
+            .pending
+            .as_ref()
+            .expect("session should have pending batch")
+            .checkpoint_end
+            .clone()
     }
 
     #[derive(Clone, Default)]
