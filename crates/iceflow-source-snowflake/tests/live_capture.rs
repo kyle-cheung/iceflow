@@ -10,7 +10,7 @@ use iceflow_source_snowflake::{
     SnowflakeAuthMethod, SnowflakeBindingRequest, SnowflakeConnectorBinding, SnowflakeSource,
     SnowflakeSourceConfig, SnowflakeTableBinding,
 };
-use iceflow_types::{IceflowJsonValue, LogicalMutation, TableId, TableMode};
+use iceflow_types::{IceflowJsonValue, LogicalMutation, Operation, TableId, TableMode};
 use std::sync::{Mutex, MutexGuard};
 use support::live_env::{
     apply_live_auth_env_overrides, load_repo_dotenv, optional_env, quote_string_literal,
@@ -111,6 +111,61 @@ fn live_capture_resumes_from_stream_checkpoint() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[ignore = "requires live Snowflake credentials"]
+fn live_capture_preserves_update_and_delete_operations() -> Result<()> {
+    let _guard = live_capture_lock();
+    let harness = LiveSnowflakeHarness::new()?;
+    harness.reset_customer_state()?;
+
+    let mut session = harness.open_bound_session(None)?;
+    let snapshot = harness.expect_batch(&mut session)?;
+    assert!(!snapshot.records.is_empty());
+
+    harness
+        .runtime()
+        .block_on(session.checkpoint(harness.ack_for(&snapshot)))?;
+
+    harness.update_customer_status("customer-001", "suspended")?;
+    harness.delete_customer("customer-002")?;
+
+    let changes = harness.expect_batch(&mut session)?;
+    assert_eq!(
+        changes.checkpoint_start.as_ref(),
+        Some(&snapshot.checkpoint_end),
+        "first incremental batch did not start from the snapshot checkpoint"
+    );
+    assert_eq!(
+        changes.records.len(),
+        2,
+        "expected one update and one delete"
+    );
+    assert_batch_ids(&changes, &["customer-001", "customer-002"]);
+
+    let updated = mutation_for_customer(&changes, "customer-001");
+    assert_eq!(updated.op, Operation::Upsert);
+    assert!(updated.after.is_some(), "update should report after image");
+    assert!(
+        updated.before.is_some(),
+        "update should capture before image"
+    );
+    assert_field_eq(updated.before.as_ref(), "status", Some("active"));
+    assert_field_eq(updated.after.as_ref(), "status", Some("suspended"));
+
+    let deleted = mutation_for_customer(&changes, "customer-002");
+    assert_eq!(deleted.op, Operation::Delete);
+    assert!(
+        deleted.before.is_some(),
+        "delete should capture before image"
+    );
+    assert_field_eq(deleted.before.as_ref(), "status", Some("trial"));
+    assert!(
+        deleted.after.is_none(),
+        "delete should not include an after image"
+    );
+    Ok(())
+}
+
 struct LiveSnowflakeHarness {
     _auth_env: LiveAuthEnvGuard,
     config: SnowflakeSourceConfig,
@@ -174,6 +229,27 @@ impl LiveSnowflakeHarness {
             self.table_name(),
             quote_string_literal(customer_id),
             quote_string_literal(status),
+        ))?;
+        Ok(())
+    }
+
+    fn update_customer_status(&self, customer_id: &str, status: &str) -> Result<()> {
+        let client = self.client()?;
+        client.exec(&format!(
+            "UPDATE {} SET status = '{}', updated_at = CURRENT_TIMESTAMP() WHERE customer_id = '{}'",
+            self.table_name(),
+            quote_string_literal(status),
+            quote_string_literal(customer_id),
+        ))?;
+        Ok(())
+    }
+
+    fn delete_customer(&self, customer_id: &str) -> Result<()> {
+        let client = self.client()?;
+        client.exec(&format!(
+            "DELETE FROM {} WHERE customer_id = '{}'",
+            self.table_name(),
+            quote_string_literal(customer_id),
         ))?;
         Ok(())
     }
@@ -271,6 +347,39 @@ fn record_customer_id(record: &LogicalMutation) -> Option<String> {
             IceflowJsonValue::String(value) => Some(value.clone()),
             _ => None,
         })
+}
+
+fn mutation_for_customer<'a>(batch: &'a SourceBatch, customer_id: &str) -> &'a LogicalMutation {
+    batch
+        .records
+        .iter()
+        .find(|record| record_customer_id(record).as_deref() == Some(customer_id))
+        .unwrap_or_else(|| panic!("missing mutation for customer_id {customer_id}"))
+}
+
+fn assert_field_eq(value: Option<&IceflowJsonValue>, field: &str, expected: Option<&str>) {
+    let actual = value.and_then(|value| object_string_field(value, field));
+    assert_eq!(
+        actual, expected,
+        "field {field} did not match expected value"
+    );
+}
+
+fn object_string_field<'a>(value: &'a IceflowJsonValue, field: &str) -> Option<&'a str> {
+    let IceflowJsonValue::Object(object) = value else {
+        return None;
+    };
+
+    object.iter().find_map(|(name, value)| {
+        if !name.eq_ignore_ascii_case(field) {
+            return None;
+        }
+
+        match value {
+            IceflowJsonValue::String(value) => Some(value.as_str()),
+            _ => None,
+        }
+    })
 }
 
 fn assert_batch_ids(batch: &SourceBatch, expected_ids: &[&str]) {
