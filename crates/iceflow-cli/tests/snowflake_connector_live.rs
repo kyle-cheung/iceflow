@@ -4,7 +4,7 @@ use anyhow::{Error, Result};
 use iceflow_cli::commands::connector_cmd::{self, CheckArgs, RunArgs};
 use iceflow_state::{SqliteStateStore, StateStore};
 use iceflow_types::TableId;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::runtime::{Builder, Runtime};
 
 #[test]
@@ -32,9 +32,10 @@ fn connector_run_bootstraps_and_resumes_snowflake_source() -> Result<()> {
         .enable_all()
         .build()
         .map_err(|err| Error::msg(format!("failed to build Tokio runtime: {err}")))?;
-    let state_path = state_db_path(&config_root, &connector_config)?;
+    let state_path = harness.connector_state_path();
+    let table_id = harness.connector_table_id();
     let first_checkpoint = require_checkpoint(
-        durable_checkpoint_token(&runtime, &state_path)?,
+        durable_checkpoint_token(&runtime, &state_path, &table_id)?,
         &state_path,
         "first",
     )?;
@@ -53,7 +54,7 @@ fn connector_run_bootstraps_and_resumes_snowflake_source() -> Result<()> {
     assert_eq!(second.total_committed_batches, 1);
 
     let second_checkpoint = require_checkpoint(
-        durable_checkpoint_token(&runtime, &state_path)?,
+        durable_checkpoint_token(&runtime, &state_path, &table_id)?,
         &state_path,
         "second",
     )?;
@@ -64,25 +65,8 @@ fn connector_run_bootstraps_and_resumes_snowflake_source() -> Result<()> {
     Ok(())
 }
 
-const CUSTOMER_STATE_TABLE_ID: &str = "customer_state.customer_state";
 const SNAPSHOT_TOKEN_PREFIX: &str = "snowflake:v1:snapshot:";
 const STREAM_TOKEN_PREFIX: &str = "snowflake:v1:stream:";
-
-fn state_db_path(config_root: &Path, connector_config: &Path) -> Result<PathBuf> {
-    let stem = connector_config
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .ok_or_else(|| {
-            Error::msg(format!(
-                "connector config path {} has invalid or missing file stem",
-                connector_config.display()
-            ))
-        })?;
-    Ok(config_root
-        .join(".iceflow")
-        .join("state")
-        .join(format!("{stem}.sqlite3")))
-}
 
 fn require_checkpoint(
     checkpoint: Option<String>,
@@ -97,9 +81,13 @@ fn require_checkpoint(
     })
 }
 
-fn durable_checkpoint_token(runtime: &Runtime, state_path: &Path) -> Result<Option<String>> {
+fn durable_checkpoint_token(
+    runtime: &Runtime,
+    state_path: &Path,
+    table_id: &TableId,
+) -> Result<Option<String>> {
     let state_path = state_path.to_path_buf();
-    let table_id = TableId::from(CUSTOMER_STATE_TABLE_ID);
+    let table_id = table_id.clone();
     let checkpoint = runtime.block_on(async move {
         let store = SqliteStateStore::open_persistent(&state_path).await?;
         store.last_durable_checkpoint_for_table(&table_id).await

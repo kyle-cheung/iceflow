@@ -8,6 +8,7 @@ use iceflow_source_snowflake::{
     client::{qualified_table_name, AdbcSnowflakeClient},
     SnowflakeAuthMethod, SnowflakeSourceConfig,
 };
+use iceflow_types::TableId;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +19,9 @@ use live_env::{
 };
 
 const LIVE_CLI_TABLE: &str = "ICEFLOW_TEST_CLI_CUSTOMER_STATE";
+const CONNECTOR_FILE_STEM: &str = "snowflake_customer_state_append";
+const CONNECTOR_DESTINATION_NAMESPACE: &str = "customer_state";
+const CONNECTOR_DESTINATION_TABLE: &str = "customer_state";
 
 pub struct LiveSnowflakeHarness {
     _auth_env: LiveAuthEnvGuard,
@@ -66,7 +70,7 @@ auth_method = "password"
             ),
         )?;
         write(
-            &root.join("connectors/snowflake_customer_state_append.toml"),
+            &connector_config_path(&root),
             &format!(
                 r#"version = 1
 source = "local_snowflake"
@@ -75,8 +79,8 @@ destination = "local_fs"
 [[tables]]
 source_schema = "{schema}"
 source_table = "{LIVE_CLI_TABLE}"
-destination_namespace = "customer_state"
-destination_table = "customer_state"
+destination_namespace = "{CONNECTOR_DESTINATION_NAMESPACE}"
+destination_table = "{CONNECTOR_DESTINATION_TABLE}"
 table_mode = "append_only"
 "#
             ),
@@ -105,8 +109,22 @@ table_mode = "append_only"
     }
 
     pub fn connector_config(&self) -> PathBuf {
+        connector_config_path(&self.root)
+    }
+
+    // Keep this in sync with connector_cmd::resolve_connector_state_path(); the
+    // live CLI test reads the persistent checkpoint DB directly.
+    pub fn connector_state_path(&self) -> PathBuf {
         self.root
-            .join("connectors/snowflake_customer_state_append.toml")
+            .join(".iceflow")
+            .join("state")
+            .join(format!("{CONNECTOR_FILE_STEM}.sqlite3"))
+    }
+
+    pub fn connector_table_id(&self) -> TableId {
+        TableId::new(format!(
+            "{CONNECTOR_DESTINATION_NAMESPACE}.{CONNECTOR_DESTINATION_TABLE}"
+        ))
     }
 
     pub fn reset_table(&self) -> Result<()> {
@@ -161,6 +179,11 @@ fn next_temp_path(label: &str) -> PathBuf {
         std::process::id(),
         NEXT_ID.fetch_add(1, Ordering::Relaxed)
     ))
+}
+
+fn connector_config_path(root: &Path) -> PathBuf {
+    root.join("connectors")
+        .join(format!("{CONNECTOR_FILE_STEM}.toml"))
 }
 
 fn reset_dir(path: &Path) -> Result<()> {
