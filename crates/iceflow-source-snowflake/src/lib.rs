@@ -326,7 +326,7 @@ mod tests {
     use iceflow_source::{
         BatchPoll, BatchRequest, SourceAdapter, SourceCapability, SourceTableSelection,
     };
-    use iceflow_types::{TableId, TableMode};
+    use iceflow_types::{CheckpointId, TableId, TableMode};
     use std::sync::{Arc, Mutex};
     use tokio::runtime::Builder;
 
@@ -671,6 +671,78 @@ mod tests {
                 .iter()
                 .all(|sql| !sql.starts_with("CREATE OR REPLACE STREAM")),
             "durable snapshot resume should not recreate the stream: {execs:?}"
+        );
+    }
+
+    #[test]
+    fn open_capture_rejects_malformed_resume_checkpoint_before_stream_ddl() {
+        let client = RecordingSnowflakeClient::default();
+        let binding = sample_binding(None);
+        let source = SnowflakeSource::new(
+            sample_config(),
+            Some(binding.clone()),
+            Box::new(client.clone()),
+        );
+
+        let err = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.open_capture(OpenCaptureRequest {
+                table: SourceTableSelection {
+                    table_id: TableId::from("customer_state.customer_state"),
+                    source_schema: binding.source_schema.clone(),
+                    source_table: binding.source_table.clone(),
+                    table_mode: TableMode::AppendOnly,
+                },
+                resume_from: Some(CheckpointId::from("snowflake:v1:stream:".to_string())),
+            }))
+            .err()
+            .expect("malformed resume checkpoint should fail");
+
+        assert!(err.to_string().contains("invalid snowflake checkpoint"));
+
+        let execs = client.execs.lock().expect("execs");
+        assert!(
+            execs
+                .iter()
+                .all(|sql| !sql.starts_with("CREATE OR REPLACE STREAM")),
+            "malformed resume checkpoint should not recreate the stream: {execs:?}"
+        );
+    }
+
+    #[test]
+    fn open_capture_rejects_malformed_durable_checkpoint_before_stream_ddl() {
+        let client = RecordingSnowflakeClient::default();
+        let binding = sample_binding(Some(CheckpointId::from("snowflake:v1:stream:".to_string())));
+        let source = SnowflakeSource::new(
+            sample_config(),
+            Some(binding.clone()),
+            Box::new(client.clone()),
+        );
+
+        let err = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(source.open_capture(OpenCaptureRequest {
+                table: SourceTableSelection {
+                    table_id: TableId::from("customer_state.customer_state"),
+                    source_schema: binding.source_schema.clone(),
+                    source_table: binding.source_table.clone(),
+                    table_mode: TableMode::AppendOnly,
+                },
+                resume_from: None,
+            }))
+            .err()
+            .expect("malformed durable checkpoint should fail");
+
+        assert!(err.to_string().contains("invalid snowflake checkpoint"));
+
+        let execs = client.execs.lock().expect("execs");
+        assert!(
+            execs
+                .iter()
+                .all(|sql| !sql.starts_with("CREATE OR REPLACE STREAM")),
+            "malformed durable checkpoint should not recreate the stream: {execs:?}"
         );
     }
 
