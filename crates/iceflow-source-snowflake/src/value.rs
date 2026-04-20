@@ -607,6 +607,23 @@ mod tests {
         assert!(err.to_string().contains("update pair"));
     }
 
+    #[test]
+    fn accepts_matching_schema_fingerprint() {
+        super::verify_schema_fingerprint("fingerprint-v1", "fingerprint-v1")
+            .expect("matching schema fingerprint should pass");
+    }
+
+    #[test]
+    fn rejects_mismatched_schema_fingerprint() {
+        let err = super::verify_schema_fingerprint("fingerprint-v1", "fingerprint-v2")
+            .expect_err("schema drift should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "Snowflake schema drift detected; rebootstrap required"
+        );
+    }
+
     fn object_field(value: &Value) -> Option<&std::collections::BTreeMap<String, Value>> {
         match value {
             Value::Object(object) => Some(object),
