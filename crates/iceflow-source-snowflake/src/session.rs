@@ -552,6 +552,51 @@ mod tests {
         assert!(!changes_query.contains("AT (STATEMENT => '01b12345-0600-1234-0000-000000000000')"));
     }
 
+    #[test]
+    fn poll_batch_aborts_incremental_capture_on_schema_drift_before_boundary_query() {
+        let client = SchemaDriftClient::default();
+        let binding = super::test_binding(None);
+        let last_durable_boundary = Checkpoint::Stream {
+            boundary_query_id: "01b12345-0601-1234-0000-000000000000".to_string(),
+        };
+        let phase_before = super::SessionPhase::Incremental {
+            last_durable_boundary: last_durable_boundary.clone(),
+        };
+        let mut session = super::SnowflakeCaptureSession::new_incremental(
+            "snowflake.config.local_snowflake".to_string(),
+            iceflow_types::TableId::from("customer_state.customer_state"),
+            iceflow_types::TableMode::AppendOnly,
+            binding,
+            Arc::new(client.clone()),
+            super::test_metadata(),
+            last_durable_boundary,
+        );
+
+        let err = Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(session.poll_batch(BatchRequest::default()))
+            .expect_err("schema drift should abort incremental polling");
+
+        assert_eq!(
+            err.to_string(),
+            "Snowflake schema drift detected; rebootstrap required"
+        );
+        assert_eq!(session.phase, phase_before);
+        assert!(session.pending.is_none());
+        assert!(
+            client.execs.lock().expect("execs").is_empty(),
+            "schema drift should abort before boundary exec"
+        );
+        let queries = client.queries.lock().expect("queries");
+        assert!(
+            queries
+                .iter()
+                .all(|sql| !sql.contains("CHANGES(INFORMATION => DEFAULT)")),
+            "schema drift should abort before querying CHANGES: {queries:?}"
+        );
+    }
+
     fn fake_snapshot_rows() -> Vec<iceflow_types::LogicalMutation> {
         crate::value::test_mutations(
             2,
@@ -626,6 +671,45 @@ mod tests {
                     "1".to_string(),
                     "after".to_string(),
                 ]],
+            })
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SchemaDriftClient {
+        execs: Arc<Mutex<Vec<String>>>,
+        queries: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl SnowflakeClient for SchemaDriftClient {
+        fn exec(&self, sql: &str) -> anyhow::Result<StatementOutcome> {
+            self.execs.lock().expect("execs").push(sql.to_string());
+            Ok(StatementOutcome {
+                query_id: "01b12345-0602-1234-0000-000000000000".to_string(),
+            })
+        }
+
+        fn query_rows(&self, sql: &str) -> anyhow::Result<RowSet> {
+            self.queries.lock().expect("queries").push(sql.to_string());
+            if sql.starts_with("DESCRIBE TABLE") {
+                return Ok(RowSet {
+                    query_id: "describe-query".to_string(),
+                    columns: Vec::new(),
+                    rows: vec![
+                        vec!["ID".to_string(), "NUMBER".to_string(), "COLUMN".to_string()],
+                        vec![
+                            "NAME".to_string(),
+                            "VARCHAR".to_string(),
+                            "COLUMN".to_string(),
+                        ],
+                    ],
+                });
+            }
+
+            Ok(RowSet {
+                query_id: "changes-query".to_string(),
+                columns: Vec::new(),
+                rows: Vec::new(),
             })
         }
     }
