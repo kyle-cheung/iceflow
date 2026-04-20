@@ -11,6 +11,7 @@ use iceflow_source_snowflake::{
     SnowflakeSourceConfig, SnowflakeTableBinding,
 };
 use iceflow_types::{IceflowJsonValue, LogicalMutation, Operation, TableId, TableMode};
+use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 use support::live_env::{
     apply_live_auth_env_overrides, load_repo_dotenv, optional_env, quote_string_literal,
@@ -129,20 +130,22 @@ fn live_capture_preserves_update_and_delete_operations() -> Result<()> {
     harness.update_customer_status("customer-001", "suspended")?;
     harness.delete_customer("customer-002")?;
 
-    let changes = harness.expect_batch(&mut session)?;
+    let (first_checkpoint_start, changes) =
+        collect_mutations_until(&harness, &mut session, &["customer-001", "customer-002"])?;
     assert_eq!(
-        changes.checkpoint_start.as_ref(),
+        first_checkpoint_start.as_ref(),
         Some(&snapshot.checkpoint_end),
         "first incremental batch did not start from the snapshot checkpoint"
     );
     assert_eq!(
-        changes.records.len(),
+        changes.len(),
         2,
-        "expected one update and one delete"
+        "expected one update and one delete across the collected batches"
     );
-    assert_batch_ids(&changes, &["customer-001", "customer-002"]);
 
-    let updated = mutation_for_customer(&changes, "customer-001");
+    let updated = changes
+        .get("customer-001")
+        .unwrap_or_else(|| panic!("missing mutation for customer_id customer-001"));
     assert_eq!(updated.op, Operation::Upsert);
     assert!(updated.after.is_some(), "update should report after image");
     assert!(
@@ -152,7 +155,9 @@ fn live_capture_preserves_update_and_delete_operations() -> Result<()> {
     assert_field_eq(updated.before.as_ref(), "status", Some("active"));
     assert_field_eq(updated.after.as_ref(), "status", Some("suspended"));
 
-    let deleted = mutation_for_customer(&changes, "customer-002");
+    let deleted = changes
+        .get("customer-002")
+        .unwrap_or_else(|| panic!("missing mutation for customer_id customer-002"));
     assert_eq!(deleted.op, Operation::Delete);
     assert!(
         deleted.before.is_some(),
@@ -163,6 +168,7 @@ fn live_capture_preserves_update_and_delete_operations() -> Result<()> {
         deleted.after.is_none(),
         "delete should not include an after image"
     );
+    assert_no_more_batches(&mut session, harness.runtime())?;
     Ok(())
 }
 
@@ -349,14 +355,6 @@ fn record_customer_id(record: &LogicalMutation) -> Option<String> {
         })
 }
 
-fn mutation_for_customer<'a>(batch: &'a SourceBatch, customer_id: &str) -> &'a LogicalMutation {
-    batch
-        .records
-        .iter()
-        .find(|record| record_customer_id(record).as_deref() == Some(customer_id))
-        .unwrap_or_else(|| panic!("missing mutation for customer_id {customer_id}"))
-}
-
 fn assert_field_eq(value: Option<&IceflowJsonValue>, field: &str, expected: Option<&str>) {
     let actual = value.and_then(|value| object_string_field(value, field));
     assert_eq!(
@@ -395,6 +393,82 @@ fn assert_batch_ids(batch: &SourceBatch, expected_ids: &[&str]) {
     assert_eq!(ids, expected, "batch customer IDs do not match expected")
 }
 
+fn collect_mutations_until(
+    harness: &LiveSnowflakeHarness,
+    session: &mut Box<dyn SourceCaptureSession + Send>,
+    expected_ids: &[&str],
+) -> Result<(
+    Option<iceflow_types::CheckpointId>,
+    BTreeMap<String, LogicalMutation>,
+)> {
+    const MAX_IDLE_POLLS: usize = 40;
+
+    let mut first_checkpoint_start = None;
+    let mut observed = BTreeMap::new();
+    let mut idle_polls = 0;
+
+    while idle_polls < MAX_IDLE_POLLS {
+        match harness
+            .runtime()
+            .block_on(session.poll_batch(BatchRequest::default()))?
+        {
+            BatchPoll::Idle => {
+                idle_polls += 1;
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            BatchPoll::Exhausted => {
+                return Err(Error::msg(
+                    "Snowflake session exhausted before expected change batches arrived",
+                ))
+            }
+            BatchPoll::Batch(batch) => {
+                idle_polls = 0;
+                if first_checkpoint_start.is_none() {
+                    first_checkpoint_start = batch.checkpoint_start.clone();
+                }
+
+                for record in &batch.records {
+                    let customer_id = record_customer_id(record).ok_or_else(|| {
+                        Error::msg("Snowflake change batch record was missing customer_id")
+                    })?;
+                    if !expected_ids.contains(&customer_id.as_str()) {
+                        return Err(Error::msg(format!(
+                            "unexpected customer_id in Snowflake change batch: {customer_id}"
+                        )));
+                    }
+                    if observed
+                        .insert(customer_id.clone(), record.clone())
+                        .is_some()
+                    {
+                        return Err(Error::msg(format!(
+                            "duplicate customer_id in Snowflake change batches: {customer_id}"
+                        )));
+                    }
+                }
+
+                harness
+                    .runtime()
+                    .block_on(session.checkpoint(harness.ack_for(&batch)))?;
+
+                if expected_ids.iter().all(|id| observed.contains_key(*id)) {
+                    return Ok((first_checkpoint_start, observed));
+                }
+            }
+        }
+    }
+
+    let missing_ids = expected_ids
+        .iter()
+        .filter(|id| !observed.contains_key(**id))
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",");
+    let observed_ids = observed.keys().cloned().collect::<Vec<_>>().join(",");
+    Err(Error::msg(format!(
+        "timed out waiting for Snowflake change batches; missing ids=[{missing_ids}] observed ids=[{observed_ids}]"
+    )))
+}
+
 fn assert_no_more_batches(
     session: &mut Box<dyn SourceCaptureSession + Send>,
     runtime: &Runtime,
@@ -408,7 +482,7 @@ fn assert_no_more_batches(
             BatchPoll::Batch(batch) => {
                 let ids = collect_customer_ids(&batch).join(",");
                 return Err(Error::msg(format!(
-                    "unexpected batch after resumed checkpoint (checkpoint={} ids=[{}])",
+                    "unexpected batch after checkpoint drain (checkpoint={} ids=[{}])",
                     batch.checkpoint_end, ids,
                 )));
             }
