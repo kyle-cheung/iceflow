@@ -157,13 +157,20 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
         .join(format!("{}.toml", connector.destination));
     let destination_config = load_destination_config(&destination_path)
         .map_err(|err| Error::msg(format!("destination '{}': {err}", connector.destination)))?;
+    let durable_checkpoint = load_existing_durable_checkpoint_for_check(
+        &args.connector_config,
+        &args.config_root,
+        &source_config.kind,
+        &connector,
+    )
+    .await?;
     let source = build_bound_source_from_config(
         &source_config,
         source_path.parent().unwrap_or_else(|| Path::new(".")),
         &BoundSourceContext {
             connector_name: connector_name(&args.connector_config)?,
             connector: connector.clone(),
-            durable_checkpoint: None,
+            durable_checkpoint,
         },
     )
     .map_err(|err| Error::msg(format!("build source '{}': {err}", connector.source)))?;
@@ -555,6 +562,47 @@ async fn open_connector_state(
     SqliteStateStore::open_persistent(path).await
 }
 
+async fn load_existing_durable_checkpoint_for_check(
+    connector_config: &Path,
+    config_root: &Path,
+    source_kind: &str,
+    connector: &ConnectorConfig,
+) -> Result<Option<iceflow_types::CheckpointId>> {
+    if source_kind != "snowflake" {
+        return Ok(None);
+    }
+
+    let Some(table) = connector.tables.first() else {
+        return Ok(None);
+    };
+
+    let state_path = resolve_connector_state_path(connector_config, config_root)?;
+    let state_exists = state_path
+        .try_exists()
+        .map_err(|err| Error::msg(format!("failed to stat {}: {err}", state_path.display())))?;
+    if !state_exists {
+        return Ok(None);
+    }
+
+    let state = SqliteStateStore::open_persistent(&state_path).await?;
+    let table_id = connector_table_id(table);
+    let durable_checkpoint = state
+        .last_durable_checkpoint_for_table(&table_id)
+        .await?
+        .map(|checkpoint| checkpoint.checkpoint);
+
+    if let Some(checkpoint) = durable_checkpoint.as_ref() {
+        iceflow_source_snowflake::decode_checkpoint(checkpoint).map_err(|err| {
+            Error::msg(format!(
+                "invalid durable checkpoint for table '{}': {err}",
+                table_id.as_str()
+            ))
+        })?;
+    }
+
+    Ok(durable_checkpoint)
+}
+
 fn parse_table_mode(value: &str) -> Result<TableMode> {
     match value {
         "append_only" => Ok(TableMode::AppendOnly),
@@ -615,6 +663,18 @@ fn validate_catalog_file(config_root: &Path, catalog_name: &str, errors: &mut Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::TableEntry;
+    use iceflow_state::{
+        checkpoint_ack, checkpoint_ref, AttemptResolution, CommitRequest, SnapshotRef,
+        SqliteStateStore, StateStore,
+    };
+    use iceflow_types::{
+        BatchId, BatchManifest, CheckpointId, IceflowDateTime, IceflowUtc, ManifestFile, Operation,
+        SourceClass, TableId,
+    };
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn check_args_parse_derives_config_root_from_nested_connector_path() -> Result<()> {
@@ -707,5 +767,208 @@ mod tests {
             PathBuf::from("/tmp/config/.iceflow/state/snowflake_customer_state_append.sqlite3")
         );
         Ok(())
+    }
+
+    #[test]
+    fn load_existing_durable_checkpoint_for_check_returns_none_without_state_file() -> Result<()> {
+        let config_root = next_temp_test_root("connector-check-no-state");
+        fs::create_dir_all(config_root.join("connectors")).map_err(|err| {
+            Error::msg(format!(
+                "failed to create connectors dir {}: {err}",
+                config_root.display()
+            ))
+        })?;
+        let connector_path = config_root.join("connectors/snowflake_customer_state_append.toml");
+        fs::write(&connector_path, "").map_err(|err| {
+            Error::msg(format!(
+                "failed to seed connector path {}: {err}",
+                connector_path.display()
+            ))
+        })?;
+
+        let durable_checkpoint = crate::block_on(load_existing_durable_checkpoint_for_check(
+            &connector_path,
+            &config_root,
+            "snowflake",
+            &sample_snowflake_connector(),
+        ))?;
+
+        assert!(durable_checkpoint.is_none());
+        assert!(!config_root.join(".iceflow/state").exists());
+
+        fs::remove_dir_all(&config_root).map_err(|err| {
+            Error::msg(format!(
+                "failed to clean test root {}: {err}",
+                config_root.display()
+            ))
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn load_existing_durable_checkpoint_for_check_returns_valid_snowflake_token() -> Result<()> {
+        let config_root = next_temp_test_root("connector-check-valid-state");
+        let connector_path = config_root.join("connectors/snowflake_customer_state_append.toml");
+        fs::create_dir_all(connector_path.parent().expect("connector parent")).map_err(|err| {
+            Error::msg(format!(
+                "failed to create connectors dir {}: {err}",
+                config_root.display()
+            ))
+        })?;
+        fs::write(&connector_path, "").map_err(|err| {
+            Error::msg(format!(
+                "failed to seed connector path {}: {err}",
+                connector_path.display()
+            ))
+        })?;
+
+        let expected = CheckpointId::from(
+            "snowflake:v1:stream:01b12345-0601-1234-0000-000000000000".to_string(),
+        );
+        crate::block_on(seed_durable_checkpoint(
+            &connector_path,
+            &config_root,
+            expected.clone(),
+        ))?;
+
+        let durable_checkpoint = crate::block_on(load_existing_durable_checkpoint_for_check(
+            &connector_path,
+            &config_root,
+            "snowflake",
+            &sample_snowflake_connector(),
+        ))?;
+
+        assert_eq!(durable_checkpoint, Some(expected));
+
+        fs::remove_dir_all(&config_root).map_err(|err| {
+            Error::msg(format!(
+                "failed to clean test root {}: {err}",
+                config_root.display()
+            ))
+        })?;
+        Ok(())
+    }
+
+    fn next_temp_test_root(label: &str) -> PathBuf {
+        static NEXT_TEMP_ROOT_ID: AtomicU64 = AtomicU64::new(0);
+
+        std::env::temp_dir().join(format!(
+            "iceflow-cli-{label}-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_ROOT_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn sample_snowflake_connector() -> ConnectorConfig {
+        ConnectorConfig {
+            version: 1,
+            source: "local_snowflake".to_string(),
+            destination: "local_fs".to_string(),
+            catalog: None,
+            capture: CaptureSettings::default(),
+            tables: vec![TableEntry {
+                source_schema: "PUBLIC".to_string(),
+                source_table: "CUSTOMER_STATE".to_string(),
+                destination_namespace: "customer_state".to_string(),
+                destination_table: "customer_state".to_string(),
+                table_mode: "append_only".to_string(),
+                key_columns: Vec::new(),
+                ordering_field: None,
+            }],
+        }
+    }
+
+    async fn seed_durable_checkpoint(
+        connector_path: &Path,
+        config_root: &Path,
+        checkpoint_id: CheckpointId,
+    ) -> Result<()> {
+        let state_path = resolve_connector_state_path(connector_path, config_root)?;
+        let store = SqliteStateStore::open_persistent(&state_path).await?;
+        let batch_id = store.register_batch(sample_manifest()).await?;
+        durable_checkpoint_batch(
+            &store,
+            &batch_id,
+            checkpoint_id,
+            "file:///tmp/connector-check",
+        )
+        .await
+    }
+
+    fn sample_manifest() -> BatchManifest {
+        let created_at =
+            IceflowDateTime::<IceflowUtc>::from_timestamp(5, 0).expect("valid timestamp");
+
+        BatchManifest {
+            batch_id: BatchId::from("batch-0001"),
+            table_id: TableId::from("customer_state.customer_state"),
+            table_mode: TableMode::AppendOnly,
+            source_id: "snowflake.config.local_snowflake".to_string(),
+            source_class: SourceClass::DatabaseCdc,
+            source_checkpoint_start: CheckpointId::from(
+                "snowflake:v1:snapshot:01b12345-0600-1234-0000-000000000000".to_string(),
+            ),
+            source_checkpoint_end: CheckpointId::from(
+                "snowflake:v1:stream:01b12345-0601-1234-0000-000000000000".to_string(),
+            ),
+            ordering_field: "snowflake_ordinal".to_string(),
+            ordering_min: 1,
+            ordering_max: 1,
+            schema_version: 1,
+            schema_fingerprint: "customer-state-v1".to_string(),
+            record_count: 1,
+            op_counts: BTreeMap::from([(Operation::Insert, 1)]),
+            file_set: vec![ManifestFile {
+                file_uri: "file:///tmp/customer_state.parquet".to_string(),
+                file_kind: "parquet".to_string(),
+                content_hash: "content-hash-1".to_string(),
+                file_size_bytes: 128,
+                record_count: 1,
+                created_at: created_at.clone(),
+            }],
+            content_hash: "batch-content-hash".to_string(),
+            created_at,
+        }
+    }
+
+    async fn durable_checkpoint_batch(
+        store: &SqliteStateStore,
+        batch_id: &BatchId,
+        checkpoint_id: CheckpointId,
+        snapshot_uri: &str,
+    ) -> Result<()> {
+        let attempt = store
+            .begin_commit(
+                batch_id.clone(),
+                CommitRequest {
+                    destination_uri: "file:///tmp/warehouse".to_string(),
+                    snapshot: SnapshotRef {
+                        uri: snapshot_uri.to_string(),
+                    },
+                    actor: "connector-cmd-test".to_string(),
+                },
+            )
+            .await?;
+
+        let snapshot = SnapshotRef {
+            uri: snapshot_uri.to_string(),
+        };
+
+        store
+            .resolve_commit(attempt.id, AttemptResolution::Committed)
+            .await?;
+        store
+            .link_checkpoint_pending(
+                batch_id.clone(),
+                checkpoint_ref("snowflake.config.local_snowflake", checkpoint_id.clone()),
+                snapshot.clone(),
+            )
+            .await?;
+        store
+            .mark_checkpoint_durable(
+                batch_id.clone(),
+                checkpoint_ack("snowflake.config.local_snowflake", checkpoint_id, snapshot),
+            )
+            .await
     }
 }
