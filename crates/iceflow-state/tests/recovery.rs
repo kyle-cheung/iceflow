@@ -1,14 +1,16 @@
 use anyhow::Result;
 use iceflow_state::{
     checkpoint_ack, checkpoint_ref, AttemptResolution, AttemptStatus, BatchStatus, CommitRequest,
-    QuarantineReason, SnapshotRef, StateStore, TestStateStore,
+    QuarantineReason, SnapshotRef, SqliteStateStore, StateStore, TestStateStore,
 };
 use iceflow_types::{
     checkpoint, BatchId, BatchManifest, ManifestFile, Operation, SourceClass, TableId, TableMode,
 };
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 #[test]
@@ -290,6 +292,33 @@ fn sqlite_connections_use_full_synchronous_mode() -> Result<()> {
 }
 
 #[test]
+fn read_only_checkpoint_lookup_does_not_create_parent_dirs_for_missing_db() -> Result<()> {
+    block_on(async {
+        let state_path = next_temp_state_db_path("read-only-missing-db");
+        let state_dir = state_path.parent().expect("state dir").to_path_buf();
+
+        assert!(!state_dir.exists());
+        let err = SqliteStateStore::read_only_last_durable_checkpoint_for_existing_db(
+            &state_path,
+            &TableId::from("customer_state"),
+        )
+        .await
+        .expect_err("missing db should fail");
+
+        assert!(
+            err.to_string().contains("sqlite open failed"),
+            "expected sqlite open failure, got {err}"
+        );
+        assert!(
+            !state_dir.exists(),
+            "read-only lookup should not create parent dir {:?}",
+            state_dir
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn quarantined_batches_remain_recovery_candidates() -> Result<()> {
     block_on(async {
         let store = TestStateStore::new().await?;
@@ -407,6 +436,16 @@ fn sample_manifest_for(
 
 fn fixed_time(offset_secs: u64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(offset_secs as i64, 0).expect("valid timestamp")
+}
+
+fn next_temp_state_db_path(label: &str) -> PathBuf {
+    static NEXT_TEMP_STATE_DB_ID: AtomicU64 = AtomicU64::new(0);
+
+    std::env::temp_dir().join(format!(
+        "iceflow-state-{label}-{}-{}/state.sqlite3",
+        std::process::id(),
+        NEXT_TEMP_STATE_DB_ID.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 async fn durable_checkpoint_batch(

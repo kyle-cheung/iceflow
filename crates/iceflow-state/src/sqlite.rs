@@ -68,6 +68,7 @@ const SQLITE_OK: c_int = 0;
 const SQLITE_ROW: c_int = 100;
 const SQLITE_DONE: c_int = 101;
 const SQLITE_NULL: c_int = 5;
+const SQLITE_OPEN_READONLY: c_int = 0x0000_0001;
 const SQLITE_OPEN_READWRITE: c_int = 0x0000_0002;
 const SQLITE_OPEN_CREATE: c_int = 0x0000_0004;
 const SQLITE_OPEN_FULLMUTEX: c_int = 0x0001_0000;
@@ -89,6 +90,14 @@ impl SqliteStateStore {
 
     pub async fn open_persistent(path: impl Into<PathBuf>) -> Result<Self> {
         Self::open_internal(path.into(), false).await
+    }
+
+    pub async fn read_only_last_durable_checkpoint_for_existing_db(
+        path: impl AsRef<Path>,
+        table_id: &TableId,
+    ) -> Result<Option<SourceCheckpoint>> {
+        let conn = Connection::open_read_only(path.as_ref())?;
+        reconcile::last_durable_checkpoint_for_table(&conn, table_id)
     }
 
     async fn open_internal(path: PathBuf, cleanup_on_drop: bool) -> Result<Self> {
@@ -569,17 +578,24 @@ pub(crate) struct Connection {
 
 impl Connection {
     pub(crate) fn open(path: &Path) -> Result<Self> {
+        let connection = Self::open_with_flags(
+            path,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+        )?;
+        connection.exec("PRAGMA foreign_keys = ON;")?;
+        connection.exec("PRAGMA synchronous = FULL;")?;
+        Ok(connection)
+    }
+
+    pub(crate) fn open_read_only(path: &Path) -> Result<Self> {
+        Self::open_with_flags(path, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX)
+    }
+
+    fn open_with_flags(path: &Path, flags: c_int) -> Result<Self> {
         let c_path = CString::new(path.to_string_lossy().as_bytes())
             .map_err(|_| Error::msg("sqlite database path contains interior null"))?;
         let mut raw = std::ptr::null_mut();
-        let rc = unsafe {
-            sqlite3_open_v2(
-                c_path.as_ptr(),
-                &mut raw,
-                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
-                std::ptr::null(),
-            )
-        };
+        let rc = unsafe { sqlite3_open_v2(c_path.as_ptr(), &mut raw, flags, std::ptr::null()) };
         if rc != SQLITE_OK {
             let message = if raw.is_null() {
                 format!("sqlite open failed with rc={rc}")
@@ -593,10 +609,7 @@ impl Connection {
             }
             return Err(Error::msg(message));
         }
-        let connection = Self { raw };
-        connection.exec("PRAGMA foreign_keys = ON;")?;
-        connection.exec("PRAGMA synchronous = FULL;")?;
-        Ok(connection)
+        Ok(Self { raw })
     }
 
     pub(crate) fn with_transaction<T>(
