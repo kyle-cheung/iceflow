@@ -72,6 +72,7 @@ const SQLITE_OPEN_READONLY: c_int = 0x0000_0001;
 const SQLITE_OPEN_READWRITE: c_int = 0x0000_0002;
 const SQLITE_OPEN_CREATE: c_int = 0x0000_0004;
 const SQLITE_OPEN_FULLMUTEX: c_int = 0x0001_0000;
+const READ_ONLY_BUSY_TIMEOUT_MS: u32 = 5_000;
 
 static NEXT_DB_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -92,7 +93,7 @@ impl SqliteStateStore {
         Self::open_internal(path.into(), false).await
     }
 
-    pub async fn read_only_last_durable_checkpoint_for_existing_db(
+    pub fn read_only_last_durable_checkpoint_for_existing_db(
         path: impl AsRef<Path>,
         table_id: &TableId,
     ) -> Result<Option<SourceCheckpoint>> {
@@ -588,7 +589,12 @@ impl Connection {
     }
 
     pub(crate) fn open_read_only(path: &Path) -> Result<Self> {
-        Self::open_with_flags(path, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX)
+        let connection = Self::open_with_flags(path, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX)?;
+        connection.exec(&format!(
+            "PRAGMA busy_timeout = {READ_ONLY_BUSY_TIMEOUT_MS};"
+        ))?;
+        connection.exec("PRAGMA query_only = ON;")?;
+        Ok(connection)
     }
 
     fn open_with_flags(path: &Path, flags: c_int) -> Result<Self> {
@@ -822,5 +828,64 @@ fn current_batch_status(conn: &Connection, batch_id: &str) -> Result<BatchStatus
             .ok_or_else(|| invalid_data(format!("unknown batch status: {value}")))
     } else {
         Err(Error::msg(format!("batch not found: {batch_id}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_connections_enable_query_only() -> Result<()> {
+        let db = TempDb::new()?;
+        let read_only = Connection::open_read_only(db.path())?;
+
+        assert_eq!(pragma_u32(&read_only, "query_only")?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn read_only_connections_set_busy_timeout() -> Result<()> {
+        let db = TempDb::new()?;
+        let read_only = Connection::open_read_only(db.path())?;
+
+        assert_eq!(pragma_u32(&read_only, "busy_timeout")?, 5_000);
+        Ok(())
+    }
+
+    fn pragma_u32(conn: &Connection, pragma: &str) -> Result<u32> {
+        let mut stmt = conn.prepare(&format!("PRAGMA {pragma}"))?;
+        if step_row(&mut stmt)? {
+            let value = stmt.column_u32(0)?;
+            step_done(&mut stmt)?;
+            Ok(value)
+        } else {
+            Err(Error::msg(format!("PRAGMA {pragma} returned no row")))
+        }
+    }
+
+    struct TempDb {
+        path: PathBuf,
+    }
+
+    impl TempDb {
+        fn new() -> Result<Self> {
+            let path = next_db_path();
+            let conn = Connection::open(&path)?;
+            drop(conn);
+            Ok(Self { path })
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(self.path.with_extension("sqlite-wal"));
+            let _ = std::fs::remove_file(self.path.with_extension("sqlite-shm"));
+        }
     }
 }

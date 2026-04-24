@@ -162,8 +162,7 @@ pub async fn check(args: CheckArgs) -> Result<CheckReport> {
         &args.config_root,
         &source_config.kind,
         &connector,
-    )
-    .await?;
+    )?;
     let source = build_bound_source_from_config(
         &source_config,
         source_path.parent().unwrap_or_else(|| Path::new(".")),
@@ -562,7 +561,7 @@ async fn open_connector_state(
     SqliteStateStore::open_persistent(path).await
 }
 
-async fn load_existing_durable_checkpoint_for_check(
+fn load_existing_durable_checkpoint_for_check(
     connector_config: &Path,
     config_root: &Path,
     source_kind: &str,
@@ -585,10 +584,11 @@ async fn load_existing_durable_checkpoint_for_check(
     }
 
     let table_id = connector_table_id(table);
-    let durable_checkpoint =
-        SqliteStateStore::read_only_last_durable_checkpoint_for_existing_db(&state_path, &table_id)
-            .await?
-            .map(|checkpoint| checkpoint.checkpoint);
+    let durable_checkpoint = SqliteStateStore::read_only_last_durable_checkpoint_for_existing_db(
+        &state_path,
+        &table_id,
+    )?
+    .map(|checkpoint| checkpoint.checkpoint);
 
     if let Some(checkpoint) = durable_checkpoint.as_ref() {
         iceflow_source_snowflake::decode_checkpoint(checkpoint).map_err(|err| {
@@ -770,14 +770,16 @@ mod tests {
 
     #[test]
     fn load_existing_durable_checkpoint_for_check_returns_none_without_state_file() -> Result<()> {
-        let config_root = next_temp_test_root("connector-check-no-state");
-        fs::create_dir_all(config_root.join("connectors")).map_err(|err| {
+        let config_root = TempTestRoot::new("connector-check-no-state")?;
+        fs::create_dir_all(config_root.path().join("connectors")).map_err(|err| {
             Error::msg(format!(
                 "failed to create connectors dir {}: {err}",
-                config_root.display()
+                config_root.path().display()
             ))
         })?;
-        let connector_path = config_root.join("connectors/snowflake_customer_state_append.toml");
+        let connector_path = config_root
+            .path()
+            .join("connectors/snowflake_customer_state_append.toml");
         fs::write(&connector_path, "").map_err(|err| {
             Error::msg(format!(
                 "failed to seed connector path {}: {err}",
@@ -785,33 +787,28 @@ mod tests {
             ))
         })?;
 
-        let durable_checkpoint = crate::block_on(load_existing_durable_checkpoint_for_check(
+        let durable_checkpoint = load_existing_durable_checkpoint_for_check(
             &connector_path,
-            &config_root,
+            config_root.path(),
             "snowflake",
             &sample_snowflake_connector(),
-        ))?;
+        )?;
 
         assert!(durable_checkpoint.is_none());
-        assert!(!config_root.join(".iceflow/state").exists());
-
-        fs::remove_dir_all(&config_root).map_err(|err| {
-            Error::msg(format!(
-                "failed to clean test root {}: {err}",
-                config_root.display()
-            ))
-        })?;
+        assert!(!config_root.path().join(".iceflow/state").exists());
         Ok(())
     }
 
     #[test]
     fn load_existing_durable_checkpoint_for_check_returns_valid_snowflake_token() -> Result<()> {
-        let config_root = next_temp_test_root("connector-check-valid-state");
-        let connector_path = config_root.join("connectors/snowflake_customer_state_append.toml");
+        let config_root = TempTestRoot::new("connector-check-valid-state")?;
+        let connector_path = config_root
+            .path()
+            .join("connectors/snowflake_customer_state_append.toml");
         fs::create_dir_all(connector_path.parent().expect("connector parent")).map_err(|err| {
             Error::msg(format!(
                 "failed to create connectors dir {}: {err}",
-                config_root.display()
+                config_root.path().display()
             ))
         })?;
         fs::write(&connector_path, "").map_err(|err| {
@@ -826,36 +823,31 @@ mod tests {
         );
         crate::block_on(seed_durable_checkpoint(
             &connector_path,
-            &config_root,
+            config_root.path(),
             expected.clone(),
         ))?;
 
-        let durable_checkpoint = crate::block_on(load_existing_durable_checkpoint_for_check(
+        let durable_checkpoint = load_existing_durable_checkpoint_for_check(
             &connector_path,
-            &config_root,
+            config_root.path(),
             "snowflake",
             &sample_snowflake_connector(),
-        ))?;
+        )?;
 
         assert_eq!(durable_checkpoint, Some(expected));
-
-        fs::remove_dir_all(&config_root).map_err(|err| {
-            Error::msg(format!(
-                "failed to clean test root {}: {err}",
-                config_root.display()
-            ))
-        })?;
         Ok(())
     }
 
     #[test]
     fn load_existing_durable_checkpoint_for_check_reads_read_only_state_db() -> Result<()> {
-        let config_root = next_temp_test_root("connector-check-read-only-state");
-        let connector_path = config_root.join("connectors/snowflake_customer_state_append.toml");
+        let config_root = TempTestRoot::new("connector-check-read-only-state")?;
+        let connector_path = config_root
+            .path()
+            .join("connectors/snowflake_customer_state_append.toml");
         fs::create_dir_all(connector_path.parent().expect("connector parent")).map_err(|err| {
             Error::msg(format!(
                 "failed to create connectors dir {}: {err}",
-                config_root.display()
+                config_root.path().display()
             ))
         })?;
         fs::write(&connector_path, "").map_err(|err| {
@@ -870,49 +862,21 @@ mod tests {
         );
         crate::block_on(seed_durable_checkpoint(
             &connector_path,
-            &config_root,
+            config_root.path(),
             expected.clone(),
         ))?;
 
-        let state_path = resolve_connector_state_path(&connector_path, &config_root)?;
-        let original_permissions = fs::metadata(&state_path)
-            .map_err(|err| {
-                Error::msg(format!(
-                    "failed to stat state db {}: {err}",
-                    state_path.display()
-                ))
-            })?
-            .permissions();
-        let mut permissions = original_permissions.clone();
-        permissions.set_readonly(true);
-        fs::set_permissions(&state_path, permissions).map_err(|err| {
-            Error::msg(format!(
-                "failed to mark state db {} read-only: {err}",
-                state_path.display()
-            ))
-        })?;
+        let state_path = resolve_connector_state_path(&connector_path, config_root.path())?;
+        let _read_only_state = ReadOnlyFileGuard::new(&state_path)?;
 
-        let durable_checkpoint = crate::block_on(load_existing_durable_checkpoint_for_check(
+        let durable_checkpoint = load_existing_durable_checkpoint_for_check(
             &connector_path,
-            &config_root,
+            config_root.path(),
             "snowflake",
             &sample_snowflake_connector(),
-        ))?;
+        )?;
 
         assert_eq!(durable_checkpoint, Some(expected));
-
-        fs::set_permissions(&state_path, original_permissions).map_err(|err| {
-            Error::msg(format!(
-                "failed to restore state db {} writable: {err}",
-                state_path.display()
-            ))
-        })?;
-        fs::remove_dir_all(&config_root).map_err(|err| {
-            Error::msg(format!(
-                "failed to clean test root {}: {err}",
-                config_root.display()
-            ))
-        })?;
         Ok(())
     }
 
@@ -924,6 +888,71 @@ mod tests {
             std::process::id(),
             NEXT_TEMP_ROOT_ID.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    struct TempTestRoot {
+        path: PathBuf,
+    }
+
+    impl TempTestRoot {
+        fn new(label: &str) -> Result<Self> {
+            let path = next_temp_test_root(label);
+            if path.exists() {
+                fs::remove_dir_all(&path).map_err(|err| {
+                    Error::msg(format!(
+                        "failed to reset test root {}: {err}",
+                        path.display()
+                    ))
+                })?;
+            }
+            Ok(Self { path })
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempTestRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    struct ReadOnlyFileGuard {
+        path: PathBuf,
+        original_permissions: fs::Permissions,
+    }
+
+    impl ReadOnlyFileGuard {
+        fn new(path: &Path) -> Result<Self> {
+            let original_permissions = fs::metadata(path)
+                .map_err(|err| {
+                    Error::msg(format!(
+                        "failed to stat read-only file {}: {err}",
+                        path.display()
+                    ))
+                })?
+                .permissions();
+            let mut read_only_permissions = original_permissions.clone();
+            read_only_permissions.set_readonly(true);
+            fs::set_permissions(path, read_only_permissions).map_err(|err| {
+                Error::msg(format!(
+                    "failed to mark file {} read-only: {err}",
+                    path.display()
+                ))
+            })?;
+            Ok(Self {
+                path: path.to_path_buf(),
+                original_permissions,
+            })
+        }
+    }
+
+    impl Drop for ReadOnlyFileGuard {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, self.original_permissions.clone());
+        }
     }
 
     fn sample_snowflake_connector() -> ConnectorConfig {

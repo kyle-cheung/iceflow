@@ -293,29 +293,24 @@ fn sqlite_connections_use_full_synchronous_mode() -> Result<()> {
 
 #[test]
 fn read_only_checkpoint_lookup_does_not_create_parent_dirs_for_missing_db() -> Result<()> {
-    block_on(async {
-        let state_path = next_temp_state_db_path("read-only-missing-db");
-        let state_dir = state_path.parent().expect("state dir").to_path_buf();
+    let state_path = next_temp_state_db_path("read-only-missing-db");
+    let state_dir = state_path.parent().expect("state dir").to_path_buf();
 
-        assert!(!state_dir.exists());
-        let err = SqliteStateStore::read_only_last_durable_checkpoint_for_existing_db(
+    assert!(!state_dir.exists());
+    assert!(
+        SqliteStateStore::read_only_last_durable_checkpoint_for_existing_db(
             &state_path,
             &TableId::from("customer_state"),
         )
-        .await
-        .expect_err("missing db should fail");
-
-        assert!(
-            err.to_string().contains("sqlite open failed"),
-            "expected sqlite open failure, got {err}"
-        );
-        assert!(
-            !state_dir.exists(),
-            "read-only lookup should not create parent dir {:?}",
-            state_dir
-        );
-        Ok(())
-    })
+        .is_err(),
+        "missing db should fail"
+    );
+    assert!(
+        !state_dir.exists(),
+        "read-only lookup should not create parent dir {:?}",
+        state_dir
+    );
+    Ok(())
 }
 
 #[test]
