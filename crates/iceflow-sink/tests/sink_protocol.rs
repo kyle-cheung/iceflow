@@ -86,6 +86,38 @@ fn prepare_commit_normalizes_trailing_slashes_in_destination_uri() -> Result<()>
     })
 }
 
+#[test]
+fn append_only_commit_preserves_cdc_mutation_log_op_counts() -> Result<()> {
+    block_on(async {
+        let sink = TestDoubleSink::new();
+        let request = sample_append_cdc_log_commit_request();
+
+        let prepared = sink.prepare_commit(request.clone()).await?;
+        assert_eq!(
+            prepared.request.manifest.op_counts,
+            BTreeMap::from([
+                (Operation::Insert, 1),
+                (Operation::Upsert, 1),
+                (Operation::Delete, 1),
+            ])
+        );
+        let committed = sink.commit(prepared).await?;
+        let snapshot = sink
+            .lookup_snapshot(&committed.snapshot)
+            .await?
+            .expect("snapshot metadata");
+
+        assert_eq!(snapshot.record_count, 3);
+
+        let lookup = sink.lookup_commit(&request.idempotency_key).await?;
+        let LookupResult::Found(outcome) = lookup else {
+            panic!("expected committed append-only mutation log");
+        };
+        assert_eq!(outcome.snapshot_id, committed.snapshot_id);
+        Ok(())
+    })
+}
+
 fn sample_append_commit_request() -> CommitRequest {
     CommitRequest {
         batch_id: BatchId::from("batch-append-0001"),
@@ -118,6 +150,25 @@ fn sample_append_commit_request() -> CommitRequest {
         },
         idempotency_key: "batch-append-0001:append".into(),
     }
+}
+
+fn sample_append_cdc_log_commit_request() -> CommitRequest {
+    let mut request = sample_append_commit_request();
+    request.batch_id = BatchId::from("batch-append-cdc-0001");
+    request.manifest.batch_id = request.batch_id.clone();
+    request.manifest.table_id = TableId::from("customer_state_mutation_log");
+    request.manifest.source_class = SourceClass::DatabaseCdc;
+    request.manifest.record_count = 3;
+    request.manifest.op_counts = BTreeMap::from([
+        (Operation::Insert, 1),
+        (Operation::Upsert, 1),
+        (Operation::Delete, 1),
+    ]);
+    request.manifest.content_hash = "content-cdc-log".to_string();
+    request.manifest.file_set[0].file_uri = "file:///tmp/batch-append-cdc-0001.parquet".to_string();
+    request.manifest.file_set[0].record_count = 3;
+    request.idempotency_key = "batch-append-cdc-0001:append".into();
+    request
 }
 
 fn block_on<F>(future: F) -> F::Output

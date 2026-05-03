@@ -1,6 +1,6 @@
 use anyhow::{Error, Result};
 use iceflow_cli::commands::connector_cmd::{self, RunArgs};
-use iceflow_state::{StateStore, TestStateStore};
+use iceflow_state::{SqliteStateStore, StateStore, TestStateStore};
 use iceflow_types::TableId;
 use std::fs;
 use std::future::Future;
@@ -35,6 +35,56 @@ fn connector_run_processes_reference_connector_to_filesystem_sink() -> Result<()
         assert!(file_count >= 2);
         assert_eq!(
             state
+                .last_durable_checkpoint_for_table(&canonical_orders_table_id())
+                .await?
+                .map(|checkpoint| checkpoint.checkpoint.to_string()),
+            Some("cp-0013".to_string())
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn connector_run_blocking_persists_state_under_config_root() -> Result<()> {
+    block_on(async {
+        let config_root = TempConfigRoot::new("connector-run-persistent-state")?;
+        let destination_root = TempOutputRoot::new("connector-run-persistent-state-output")?;
+        config_root.write_orders_append_connector(destination_root.path())?;
+
+        let connector_config = config_root.path().join("connectors/orders_append.toml");
+        let state_path = config_root
+            .path()
+            .join(".iceflow/state/orders_append.sqlite3");
+
+        assert!(!state_path.exists());
+
+        let first_report = connector_cmd::run_blocking(RunArgs {
+            connector_config: connector_config.clone(),
+            config_root: config_root.path().to_path_buf(),
+            batch_limit: Some(1),
+        })?;
+
+        assert_eq!(first_report.total_committed_batches, 1);
+        assert!(state_path.exists());
+        assert_eq!(
+            SqliteStateStore::open_persistent(&state_path)
+                .await?
+                .last_durable_checkpoint_for_table(&canonical_orders_table_id())
+                .await?
+                .map(|checkpoint| checkpoint.checkpoint.to_string()),
+            Some("cp-0011".to_string())
+        );
+
+        let second_report = connector_cmd::run_blocking(RunArgs {
+            connector_config,
+            config_root: config_root.path().to_path_buf(),
+            batch_limit: None,
+        })?;
+
+        assert_eq!(second_report.total_committed_batches, 1);
+        assert_eq!(
+            SqliteStateStore::open_persistent(&state_path)
+                .await?
                 .last_durable_checkpoint_for_table(&canonical_orders_table_id())
                 .await?
                 .map(|checkpoint| checkpoint.checkpoint.to_string()),

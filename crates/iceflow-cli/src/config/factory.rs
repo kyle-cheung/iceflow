@@ -13,7 +13,7 @@ use iceflow_source::{
     SourceAdapter, SourceCaptureSession, SourceCheckReport, SourceSpec,
 };
 use iceflow_state::SnapshotRef;
-use iceflow_types::{SourceClass, TableId};
+use iceflow_types::{CheckpointId, SourceClass, TableId};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -92,8 +92,76 @@ pub fn build_source_from_config(
                 fixture_root_label.to_string(),
             )))
         }
+        "snowflake" => {
+            let source_label = config
+                .properties
+                .get("source_label")
+                .cloned()
+                .unwrap_or_else(|| "snowflake".to_string());
+            build_snowflake_source(config, source_label, None)
+        }
         other => Err(Error::msg(format!("unsupported source kind: {other}"))),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundSourceContext {
+    pub connector_name: String,
+    pub connector: ConnectorConfig,
+    pub durable_checkpoint: Option<CheckpointId>,
+}
+
+pub fn build_bound_source_from_config(
+    config: &SourceConfig,
+    config_base: &Path,
+    ctx: &BoundSourceContext,
+) -> Result<Box<dyn SourceAdapter>> {
+    match config.kind.as_str() {
+        "file" => build_source_from_config(config, config_base),
+        "snowflake" => {
+            let binding = iceflow_source_snowflake::SnowflakeConnectorBinding::from_request(
+                iceflow_source_snowflake::SnowflakeBindingRequest {
+                    connector_name: ctx.connector_name.clone(),
+                    tables: ctx
+                        .connector
+                        .tables
+                        .iter()
+                        .map(|table| iceflow_source_snowflake::SnowflakeTableBinding {
+                            source_schema: table.source_schema.clone(),
+                            source_table: table.source_table.clone(),
+                            destination_namespace: table.destination_namespace.clone(),
+                            destination_table: table.destination_table.clone(),
+                            table_mode: table.table_mode.clone(),
+                        })
+                        .collect(),
+                    durable_checkpoint: ctx.durable_checkpoint.clone(),
+                },
+            )
+            .map_err(|err| Error::msg(err.to_string()))?;
+            build_snowflake_source(config, ctx.connector.source.clone(), Some(binding))
+        }
+        other => Err(Error::msg(format!("unsupported source kind: {other}"))),
+    }
+}
+
+fn build_snowflake_source(
+    config: &SourceConfig,
+    source_label: String,
+    binding: Option<iceflow_source_snowflake::SnowflakeConnectorBinding>,
+) -> Result<Box<dyn SourceAdapter>> {
+    let typed = iceflow_source_snowflake::SnowflakeSourceConfig::from_properties(
+        source_label,
+        &config.properties,
+    )
+    .map_err(|err| Error::msg(err.to_string()))?;
+    let client = iceflow_source_snowflake::client::AdbcSnowflakeClient::connect(typed.clone())
+        .map_err(|err| Error::msg(err.to_string()))?;
+
+    Ok(Box::new(iceflow_source_snowflake::SnowflakeSource::new(
+        typed,
+        binding,
+        Box::new(client),
+    )))
 }
 
 pub fn build_sink_from_config(

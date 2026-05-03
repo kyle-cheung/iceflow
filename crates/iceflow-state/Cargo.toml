@@ -7,3 +7,6 @@ edition.workspace = true
 anyhow = { path = "../anyhow" }
 chrono = { path = "../chrono" }
 iceflow-types = { path = "../iceflow-types" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt"] }

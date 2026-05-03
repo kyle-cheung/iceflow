@@ -68,23 +68,53 @@ const SQLITE_OK: c_int = 0;
 const SQLITE_ROW: c_int = 100;
 const SQLITE_DONE: c_int = 101;
 const SQLITE_NULL: c_int = 5;
+const SQLITE_OPEN_READONLY: c_int = 0x0000_0001;
 const SQLITE_OPEN_READWRITE: c_int = 0x0000_0002;
 const SQLITE_OPEN_CREATE: c_int = 0x0000_0004;
 const SQLITE_OPEN_FULLMUTEX: c_int = 0x0001_0000;
+const READ_ONLY_BUSY_TIMEOUT_MS: u32 = 5_000;
 
 static NEXT_DB_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug)]
 pub struct SqliteStateStore {
     path: PathBuf,
+    cleanup_on_drop: bool,
 }
 
 pub use SqliteStateStore as TestStateStore;
 
 impl SqliteStateStore {
     pub async fn new() -> Result<Self> {
-        let path = next_db_path();
-        let store = Self { path };
+        Self::open_internal(next_db_path(), true).await
+    }
+
+    pub async fn open_persistent(path: impl Into<PathBuf>) -> Result<Self> {
+        Self::open_internal(path.into(), false).await
+    }
+
+    pub fn read_only_last_durable_checkpoint_for_existing_db(
+        path: impl AsRef<Path>,
+        table_id: &TableId,
+    ) -> Result<Option<SourceCheckpoint>> {
+        let conn = Connection::open_read_only(path.as_ref())?;
+        reconcile::last_durable_checkpoint_for_table(&conn, table_id)
+    }
+
+    async fn open_internal(path: PathBuf, cleanup_on_drop: bool) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                Error::msg(format!(
+                    "failed to create sqlite state directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+
+        let store = Self {
+            path,
+            cleanup_on_drop,
+        };
         let conn = Connection::open(&store.path)?;
         conn.exec("PRAGMA journal_mode = WAL;")?;
         conn.exec("PRAGMA synchronous = FULL;")?;
@@ -179,7 +209,9 @@ impl SqliteStateStore {
 
 impl Drop for SqliteStateStore {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if self.cleanup_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -547,17 +579,29 @@ pub(crate) struct Connection {
 
 impl Connection {
     pub(crate) fn open(path: &Path) -> Result<Self> {
+        let connection = Self::open_with_flags(
+            path,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+        )?;
+        connection.exec("PRAGMA foreign_keys = ON;")?;
+        connection.exec("PRAGMA synchronous = FULL;")?;
+        Ok(connection)
+    }
+
+    pub(crate) fn open_read_only(path: &Path) -> Result<Self> {
+        let connection = Self::open_with_flags(path, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX)?;
+        connection.exec(&format!(
+            "PRAGMA busy_timeout = {READ_ONLY_BUSY_TIMEOUT_MS};"
+        ))?;
+        connection.exec("PRAGMA query_only = ON;")?;
+        Ok(connection)
+    }
+
+    fn open_with_flags(path: &Path, flags: c_int) -> Result<Self> {
         let c_path = CString::new(path.to_string_lossy().as_bytes())
             .map_err(|_| Error::msg("sqlite database path contains interior null"))?;
         let mut raw = std::ptr::null_mut();
-        let rc = unsafe {
-            sqlite3_open_v2(
-                c_path.as_ptr(),
-                &mut raw,
-                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
-                std::ptr::null(),
-            )
-        };
+        let rc = unsafe { sqlite3_open_v2(c_path.as_ptr(), &mut raw, flags, std::ptr::null()) };
         if rc != SQLITE_OK {
             let message = if raw.is_null() {
                 format!("sqlite open failed with rc={rc}")
@@ -571,10 +615,7 @@ impl Connection {
             }
             return Err(Error::msg(message));
         }
-        let connection = Self { raw };
-        connection.exec("PRAGMA foreign_keys = ON;")?;
-        connection.exec("PRAGMA synchronous = FULL;")?;
-        Ok(connection)
+        Ok(Self { raw })
     }
 
     pub(crate) fn with_transaction<T>(
@@ -787,5 +828,64 @@ fn current_batch_status(conn: &Connection, batch_id: &str) -> Result<BatchStatus
             .ok_or_else(|| invalid_data(format!("unknown batch status: {value}")))
     } else {
         Err(Error::msg(format!("batch not found: {batch_id}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_connections_enable_query_only() -> Result<()> {
+        let db = TempDb::new()?;
+        let read_only = Connection::open_read_only(db.path())?;
+
+        assert_eq!(pragma_u32(&read_only, "query_only")?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn read_only_connections_set_busy_timeout() -> Result<()> {
+        let db = TempDb::new()?;
+        let read_only = Connection::open_read_only(db.path())?;
+
+        assert_eq!(pragma_u32(&read_only, "busy_timeout")?, 5_000);
+        Ok(())
+    }
+
+    fn pragma_u32(conn: &Connection, pragma: &str) -> Result<u32> {
+        let mut stmt = conn.prepare(&format!("PRAGMA {pragma}"))?;
+        if step_row(&mut stmt)? {
+            let value = stmt.column_u32(0)?;
+            step_done(&mut stmt)?;
+            Ok(value)
+        } else {
+            Err(Error::msg(format!("PRAGMA {pragma} returned no row")))
+        }
+    }
+
+    struct TempDb {
+        path: PathBuf,
+    }
+
+    impl TempDb {
+        fn new() -> Result<Self> {
+            let path = next_db_path();
+            let conn = Connection::open(&path)?;
+            drop(conn);
+            Ok(Self { path })
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(self.path.with_extension("sqlite-wal"));
+            let _ = std::fs::remove_file(self.path.with_extension("sqlite-shm"));
+        }
     }
 }

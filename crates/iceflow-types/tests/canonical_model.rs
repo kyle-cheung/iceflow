@@ -184,6 +184,47 @@ fn append_only_mutation_allows_empty_key() {
     assert!(mutation.is_ok());
 }
 
+#[test]
+fn append_only_mutation_log_allows_source_delete_semantics() {
+    let mutation = LogicalMutation::delete(
+        table_id("customer_state_mutations"),
+        "source-a",
+        SourceClass::DatabaseCdc,
+        TableMode::AppendOnly,
+        key([("customer_id", "c1")]),
+        ordering("source_position", 2),
+        checkpoint("batch-0002"),
+        1,
+        fixed_time(),
+        BTreeMap::new(),
+    )
+    .with_before(json!({"customer_id": "c1", "status": "trial"}))
+    .build();
+
+    assert!(mutation.is_ok());
+}
+
+#[test]
+fn append_only_mutation_log_allows_source_upsert_semantics() {
+    let mutation = LogicalMutation::upsert(
+        table_id("customer_state_mutations"),
+        "source-a",
+        SourceClass::DatabaseCdc,
+        TableMode::AppendOnly,
+        key([("customer_id", "c1")]),
+        ordering("source_position", 3),
+        checkpoint("batch-0003"),
+        1,
+        fixed_time(),
+        BTreeMap::new(),
+    )
+    .with_before(json!({"customer_id": "c1", "status": "trial"}))
+    .with_after(json!({"customer_id": "c1", "status": "active"}))
+    .build();
+
+    assert!(mutation.is_ok());
+}
+
 fn valid_keyed_mutation() -> LogicalMutation {
     LogicalMutation::builder(
         table_id("customer_state"),

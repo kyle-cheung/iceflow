@@ -1,0 +1,18 @@
+[package]
+name = "iceflow-source-snowflake"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+adbc_core = { git = "https://github.com/apache/arrow-adbc", tag = "apache-arrow-adbc-22", package = "adbc_core" }
+adbc_snowflake = { git = "https://github.com/apache/arrow-adbc", tag = "apache-arrow-adbc-22", package = "adbc_snowflake" }
+anyhow = "1"
+async-trait = "0.1"
+arrow-array = "57"
+arrow-cast = "57"
+iceflow-source = { path = "../iceflow-source" }
+iceflow-types = { path = "../iceflow-types" }
+
+[dev-dependencies]
+dotenvy = "0.15"
+tokio = { version = "1", features = ["rt"] }

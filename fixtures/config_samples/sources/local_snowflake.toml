@@ -1,0 +1,10 @@
+version = 1
+kind = "snowflake"
+
+[properties]
+account = "$SNOWFLAKE_ACCOUNT"
+user = "$SNOWFLAKE_USER"
+warehouse = "$SNOWFLAKE_WAREHOUSE"
+role = "$SNOWFLAKE_ROLE"
+database = "$SNOWFLAKE_DATABASE"
+auth_method = "password"

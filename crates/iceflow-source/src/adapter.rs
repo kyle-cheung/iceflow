@@ -1,9 +1,9 @@
-use anyhow::Result;
 use async_trait::async_trait;
 use iceflow_types::SourceClass;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::capture::{OpenCaptureRequest, SourceCaptureSession};
+use crate::SourceResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceSpec {
@@ -34,10 +34,10 @@ pub struct SourceCheckReport {
 
 #[async_trait]
 pub trait SourceAdapter: Send + Sync {
-    async fn spec(&self) -> Result<SourceSpec>;
-    async fn check(&self) -> Result<SourceCheckReport>;
+    async fn spec(&self) -> SourceResult<SourceSpec>;
+    async fn check(&self) -> SourceResult<SourceCheckReport>;
     async fn open_capture(
         &self,
         req: OpenCaptureRequest,
-    ) -> Result<Box<dyn SourceCaptureSession + Send>>;
+    ) -> SourceResult<Box<dyn SourceCaptureSession + Send>>;
 }

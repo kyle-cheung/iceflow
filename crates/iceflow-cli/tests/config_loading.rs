@@ -1,23 +1,77 @@
 use anyhow::{Error, Result};
 use iceflow_cli::config::{
-    build_sink_from_config, build_source_from_config, connector_table_id, load_catalog_config,
-    load_connector_config, load_destination_config, load_optional_catalog_config,
-    load_source_config, resolve_catalog_name, CatalogConfig, ConfiguredSink, ConnectorConfig,
-    SourceConfig,
+    build_bound_source_from_config, build_sink_from_config, build_source_from_config,
+    connector_table_id, load_catalog_config, load_connector_config, load_destination_config,
+    load_optional_catalog_config, load_source_config, resolve_catalog_name, BoundSourceContext,
+    CatalogConfig, ConfiguredSink, ConnectorConfig, SourceConfig,
 };
 use iceflow_source::{
     BatchPoll, BatchRequest, CheckpointAck, OpenCaptureRequest, SourceTableSelection,
 };
 use iceflow_types::{TableId, TableMode};
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 fn fixtures() -> &'static Path {
     Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../fixtures/config_samples"
     ))
+}
+
+const SNOWFLAKE_SAMPLE_ENV_VARS: &[(&str, &str)] = &[
+    ("SNOWFLAKE_ACCOUNT", "snowflake-account"),
+    ("SNOWFLAKE_USER", "snowflake-user"),
+    ("SNOWFLAKE_WAREHOUSE", "snowflake-warehouse"),
+    ("SNOWFLAKE_ROLE", "snowflake-role"),
+    ("SNOWFLAKE_DATABASE", "snowflake-database"),
+];
+
+#[must_use]
+struct SnowflakeSampleEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    prior_values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl SnowflakeSampleEnvGuard {
+    fn install() -> Self {
+        let lock = sample_env_lock().lock().expect("env lock");
+        let prior_values = SNOWFLAKE_SAMPLE_ENV_VARS
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
+            .collect();
+
+        for (name, value) in SNOWFLAKE_SAMPLE_ENV_VARS {
+            std::env::set_var(name, value);
+        }
+
+        Self {
+            _lock: lock,
+            prior_values,
+        }
+    }
+}
+
+impl Drop for SnowflakeSampleEnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in std::mem::take(&mut self.prior_values) {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+// This lock is intentionally independent because this helper lives in a
+// different test binary than the shared live-env helper; a shared
+// test-support crate would be the right consolidation point later.
+fn sample_env_lock() -> &'static Mutex<()> {
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    &ENV_LOCK
 }
 
 fn next_temp_config_path(name: &str) -> PathBuf {
@@ -104,6 +158,41 @@ fn load_source_config_parses_file_source() -> Result<()> {
 }
 
 #[test]
+fn load_source_config_parses_local_snowflake_sample() -> Result<()> {
+    let _env_guard = SnowflakeSampleEnvGuard::install();
+
+    let config = load_source_config(&fixtures().join("sources/local_snowflake.toml"))?;
+
+    assert_eq!(config.kind, "snowflake");
+    assert_eq!(
+        config.properties.get("account").map(String::as_str),
+        Some("snowflake-account")
+    );
+    assert_eq!(
+        config.properties.get("user").map(String::as_str),
+        Some("snowflake-user")
+    );
+    assert_eq!(
+        config.properties.get("warehouse").map(String::as_str),
+        Some("snowflake-warehouse")
+    );
+    assert_eq!(
+        config.properties.get("role").map(String::as_str),
+        Some("snowflake-role")
+    );
+    assert_eq!(
+        config.properties.get("database").map(String::as_str),
+        Some("snowflake-database")
+    );
+    assert_eq!(
+        config.properties.get("auth_method").map(String::as_str),
+        Some("password")
+    );
+
+    Ok(())
+}
+
+#[test]
 fn load_connector_config_parses_orders_append() -> Result<()> {
     let config = load_connector_config(&fixtures().join("connectors/orders_append.toml"))?;
 
@@ -112,6 +201,25 @@ fn load_connector_config_parses_orders_append() -> Result<()> {
     assert_eq!(config.tables.len(), 1);
     assert_eq!(config.tables[0].source_table, "orders_events");
     assert_eq!(config.tables[0].table_mode, "append_only");
+    Ok(())
+}
+
+#[test]
+fn load_connector_config_parses_snowflake_customer_state_append() -> Result<()> {
+    let config =
+        load_connector_config(&fixtures().join("connectors/snowflake_customer_state_append.toml"))?;
+
+    assert_eq!(config.source, "local_snowflake");
+    assert_eq!(config.destination, "local_fs");
+    assert_eq!(config.tables.len(), 1);
+
+    let table = &config.tables[0];
+    assert_eq!(table.source_schema, "PUBLIC");
+    assert_eq!(table.source_table, "CUSTOMER_STATE");
+    assert_eq!(table.destination_namespace, "customer_state");
+    assert_eq!(table.destination_table, "customer_state");
+    assert_eq!(table.table_mode, "append_only");
+
     Ok(())
 }
 
@@ -329,6 +437,93 @@ fn build_source_from_config_routes_file_tables_through_fixture_root() -> Result<
             assert_ne!(table_id, TableId::new(table_entry.source_table.clone()));
             Ok(())
         })
+}
+
+#[test]
+fn build_bound_source_from_config_routes_file_tables_through_fixture_root() -> Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("tokio runtime")
+        .block_on(async {
+            let source_path = source_config_path();
+            let source_config = load_source_config(&source_path)?;
+            let connector =
+                load_connector_config(&fixtures().join("connectors/orders_append.toml"))?;
+            let table_entry = &connector.tables[0];
+            let table_id = connector_table_id(table_entry);
+            let source = build_bound_source_from_config(
+                &source_config,
+                source_path.parent().unwrap_or_else(|| Path::new(".")),
+                &BoundSourceContext {
+                    connector_name: "orders_append".to_string(),
+                    connector: connector.clone(),
+                    durable_checkpoint: None,
+                },
+            )?;
+
+            let mut session = source
+                .open_capture(OpenCaptureRequest {
+                    table: SourceTableSelection {
+                        table_id: table_id.clone(),
+                        source_schema: table_entry.source_schema.clone(),
+                        source_table: table_entry.source_table.clone(),
+                        table_mode: TableMode::AppendOnly,
+                    },
+                    resume_from: None,
+                })
+                .await?;
+
+            let batch = match session.poll_batch(BatchRequest::default()).await? {
+                BatchPoll::Batch(batch) => batch,
+                other => panic!("expected Batch, got {other:?}"),
+            };
+
+            assert_eq!(batch.batch_label.as_deref(), Some("batch-0001.jsonl"));
+            assert_eq!(batch.records.len(), 2);
+            session.close().await?;
+            Ok(())
+        })
+}
+
+#[test]
+fn build_bound_source_from_config_routes_snowflake_to_binding_validation() {
+    let source_config = SourceConfig {
+        version: 1,
+        kind: "snowflake".to_string(),
+        properties: BTreeMap::from([
+            ("account".to_string(), "xy12345.us-east-1".to_string()),
+            ("user".to_string(), "ICEFLOW_DEMO".to_string()),
+            ("password".to_string(), "secret".to_string()),
+            ("warehouse".to_string(), "ICEFLOW_WH".to_string()),
+            ("role".to_string(), "ICEFLOW_ROLE".to_string()),
+            ("database".to_string(), "SOURCE_DB".to_string()),
+            ("auth_method".to_string(), "password".to_string()),
+        ]),
+    };
+    let connector = ConnectorConfig {
+        version: 1,
+        source: "local_snowflake".to_string(),
+        destination: "local_fs".to_string(),
+        catalog: None,
+        capture: Default::default(),
+        tables: Vec::new(),
+    };
+
+    let result = build_bound_source_from_config(
+        &source_config,
+        Path::new("/tmp/config/sources"),
+        &BoundSourceContext {
+            connector_name: "snowflake_customer_state_append".to_string(),
+            connector,
+            durable_checkpoint: None,
+        },
+    );
+    let err = match result {
+        Ok(_) => panic!("snowflake source should reject invalid binding"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("exactly one selected table"));
 }
 
 #[test]

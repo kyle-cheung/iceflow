@@ -389,10 +389,10 @@ pub fn validate_mutation(m: &LogicalMutation) -> Result<()> {
         }
     }
 
+    // Append-only tables may still store CDC-style source mutations as an
+    // append-only mutation log. Real sink row-state convergence is a separate
+    // keyed-upsert concern.
     match m.table_mode {
-        TableMode::AppendOnly if m.op != Operation::Insert => {
-            anyhow::bail!("append_only requires insert operations")
-        }
         TableMode::KeyedUpsert if m.op == Operation::Insert => {
             anyhow::bail!("keyed_upsert requires upsert or delete operations")
         }

@@ -15,6 +15,7 @@ Start in `AGENTS.md` when you need to orient yourself quickly. Use the files in 
 
 - `crates/iceflow-types`: shared domain vocabulary, manifest types, mutation modeling, and static reference workload metadata.
 - `crates/iceflow-source`: source adapter boundary plus the deterministic file-backed reference source.
+- `crates/iceflow-source-snowflake`: Snowflake source implementation, managed stream bootstrap, and `CHANGES` capture.
 - `crates/iceflow-worker-duckdb`: normalization, Parquet materialization, and offline compaction helpers.
 - `crates/iceflow-state`: SQLite-backed control plane, migrations, persisted batch/attempt/checkpoint state, and recovery/orphan bookkeeping.
 - `crates/iceflow-sink`: sink protocol plus append-only filesystem/Polaris implementations and test-double coverage.
@@ -25,6 +26,7 @@ Start in `AGENTS.md` when you need to orient yourself quickly. Use the files in 
 
 - `docs/contributing/crates/iceflow-types.md`
 - `docs/contributing/crates/iceflow-source.md`
+- `docs/contributing/crates/iceflow-source-snowflake.md`
 - `docs/contributing/crates/iceflow-worker-duckdb.md`
 - `docs/contributing/crates/iceflow-state.md`
 - `docs/contributing/crates/iceflow-sink.md`

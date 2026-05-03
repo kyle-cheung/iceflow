@@ -9,6 +9,7 @@ async-trait = "0.1"
 iceflow-runtime = { path = "../iceflow-runtime" }
 iceflow-sink = { path = "../iceflow-sink" }
 iceflow-source = { path = "../iceflow-source" }
+iceflow-source-snowflake = { path = "../iceflow-source-snowflake" }
 iceflow-state = { path = "../iceflow-state" }
 iceflow-types = { path = "../iceflow-types" }
 iceflow-worker-duckdb = { path = "../iceflow-worker-duckdb" }
@@ -18,4 +19,5 @@ serde_json = { version = "1.0.149" }
 toml = "0.8"
 
 [dev-dependencies]
+dotenvy = "0.15"
 tokio = { version = "1", features = ["rt"] }
